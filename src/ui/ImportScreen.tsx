@@ -1,7 +1,10 @@
 import { useRef, useState, type DragEvent } from 'react';
-import { FileArchive } from 'lucide-react';
+import { Download, FileArchive } from 'lucide-react';
 
 const GUIDE_URL = 'https://mod.io/g/over-the-hill/r/official-livery-modding-guide';
+// The file the official guide links to (as of 2026-10-15). If Funselektor replaces it,
+// the guide link in the note below still leads to the current one.
+const TEMPLATE_DOWNLOAD_URL = 'https://drive.google.com/file/d/1OpPvbBMt0BfWtaGPjOJ2EZZSwvpurqtJ/view?usp=sharing';
 
 interface Props {
   busy: boolean;
@@ -41,46 +44,64 @@ export function ImportScreen({ busy, error, onImport }: Props) {
           Gestalte eigene Lackierungen auf den offiziellen Vorlagen und schick sie direkt ins Spiel oder als Mod zu mod.io.
         </p>
 
-        <div
-          className={`dropzone${dragging ? ' is-dragging' : ''}`}
-          onDragOver={(e) => {
-            e.preventDefault();
-            setDragging(true);
-          }}
-          onDragLeave={() => setDragging(false)}
-          onDrop={onDrop}
-          aria-busy={busy}
-        >
-          {busy ? (
-            <>
-              <span className="spinner" />
-              <p>Vorlagen werden gelesen …</p>
-            </>
-          ) : (
-            <>
-              <FileArchive size={30} strokeWidth={1.5} aria-hidden />
-              <p>
-                Zieh das offizielle Vorlagen-Paket hierher
-                <br />
-                <small>over_the_hill_Livery_Templates_Assets_Package.zip, ca. 100 MB</small>
-              </p>
-              <button type="button" className="btn btn-primary" onClick={() => input.current?.click()}>
-                Zip auswählen
-              </button>
-            </>
-          )}
-          <input
-            ref={input}
-            type="file"
-            accept=".zip,application/zip"
-            hidden
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file) onImport(file);
-              e.target.value = '';
-            }}
-          />
-        </div>
+        <ol className="import-steps">
+          <li className="import-step">
+            <div className="import-step-body">
+              <h2>Vorlagen-Paket herunterladen</h2>
+              <p>Die offizielle Datei von Funselektor liegt auf Google Drive, etwa 100 MB. Du brauchst sie nur einmal.</p>
+              <a className="btn btn-quiet" href={TEMPLATE_DOWNLOAD_URL} target="_blank" rel="noreferrer">
+                <Download size={16} aria-hidden /> Von Google Drive herunterladen
+              </a>
+            </div>
+          </li>
+          <li className="import-step">
+            <div className="import-step-body">
+              <h2>Paket in den Editor laden</h2>
+              <div
+                className={`dropzone${dragging ? ' is-dragging' : ''}`}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  setDragging(true);
+                }}
+                onDragLeave={() => setDragging(false)}
+                onDrop={onDrop}
+                aria-busy={busy}
+              >
+                {busy ? (
+                  <>
+                    <span className="spinner" />
+                    <p>Vorlagen werden gelesen …</p>
+                  </>
+                ) : (
+                  <>
+                    <FileArchive size={28} strokeWidth={1.5} aria-hidden />
+                    <p>
+                      Zip hierher ziehen
+                      <br />
+                      <small>
+                        over_the_hill_<wbr />Livery_<wbr />Templates_<wbr />Assets_<wbr />Package.zip
+                      </small>
+                    </p>
+                    <button type="button" className="btn btn-primary" onClick={() => input.current?.click()}>
+                      Zip auswählen
+                    </button>
+                  </>
+                )}
+                <input
+                  ref={input}
+                  type="file"
+                  accept=".zip,application/zip"
+                  hidden
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) onImport(file);
+                    e.target.value = '';
+                  }}
+                />
+              </div>
+            </div>
+          </li>
+        </ol>
 
         {(error || devError) && (
           <p className="import-error" role="alert">
@@ -89,7 +110,8 @@ export function ImportScreen({ busy, error, onImport }: Props) {
         )}
 
         <p className="import-note">
-          Das Paket bleibt in deinem Browser und wird nirgends hochgeladen. Den Download-Link findest du im{' '}
+          Das Paket bleibt in deinem Browser und wird nirgends hochgeladen. Falls der Download nicht mehr klappt, steht der
+          aktuelle Link im{' '}
           <a href={GUIDE_URL} target="_blank" rel="noreferrer">
             offiziellen Livery-Guide
           </a>

@@ -29,7 +29,8 @@ npm run dev
 
 Danach `http://localhost:5173` öffnen.
 Beim ersten Start fragt der Editor nach dem Vorlagen-Paket.
-Den Download-Link gibt es im offiziellen Guide, das Zip bleibt danach im Browser gespeichert.
+Den Download verlinkt der Startbildschirm direkt ([offizielle Datei auf Google Drive](https://drive.google.com/file/d/1OpPvbBMt0BfWtaGPjOJ2EZZSwvpurqtJ/view?usp=sharing)).
+Das Zip bleibt danach im Browser gespeichert.
 
 Für das direkte Senden ins Spiel braucht es Chrome oder Edge auf dem Rechner, auf dem over the hill läuft (Windows).
 Andere Browser können nur das Zip exportieren.

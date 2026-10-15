@@ -90,8 +90,9 @@ h3 {
 
 .wordmark {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 10px;
+  gap: 6px 10px;
   font-family: var(--font-head);
   font-weight: 700;
   font-size: 44px;
@@ -118,6 +119,7 @@ h3 {
 }
 
 .wordmark-small {
+  flex-wrap: nowrap;
   font-size: 22px;
   white-space: nowrap;
 }
@@ -137,6 +139,7 @@ h3 {
   border-radius: var(--radius-m);
   font-weight: 500;
   white-space: nowrap;
+  text-decoration: none;
   transition: background-color 120ms ease;
 }
 
@@ -156,6 +159,7 @@ h3 {
 
 .btn-quiet {
   background: var(--raised);
+  color: var(--bone);
 }
 
 .btn-quiet:not(:disabled):hover {
@@ -281,6 +285,7 @@ h3 {
 
 .import {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: 1fr auto;
   justify-items: center;
   height: 100%;
@@ -306,11 +311,59 @@ h3 {
   max-width: 44ch;
 }
 
+/* Download, then import: a real two-step sequence, so the steps are numbered. */
+.import-steps {
+  display: grid;
+  gap: 24px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+
+.import-step {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  column-gap: 14px;
+  counter-increment: step;
+}
+
+.import-step::before {
+  content: counter(step);
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1.5px solid var(--amber);
+  border-radius: 50%;
+  color: var(--amber);
+  font-family: var(--font-head);
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.import-step-body h2 {
+  margin: 2px 0 6px;
+  font-family: var(--font-head);
+  font-weight: 600;
+  font-size: 19px;
+  line-height: 1.25;
+}
+
+.import-step-body > p {
+  margin: 0 0 12px;
+  color: var(--dust);
+}
+
+.import-step-body .dropzone {
+  margin-top: 10px;
+}
+
 .dropzone {
   display: grid;
   justify-items: center;
-  gap: 14px;
-  padding: 30px 20px;
+  gap: 12px;
+  padding: 24px 20px;
   border: 1.5px dashed var(--line-strong);
   border-radius: 10px;
   text-align: center;
@@ -328,6 +381,7 @@ h3 {
 .dropzone small {
   color: var(--dim);
   font-size: 12.5px;
+  overflow-wrap: anywhere;
 }
 
 .dropzone.is-dragging {
@@ -359,6 +413,20 @@ h3 {
   padding: 18px 0 6px;
   color: var(--dim);
   font-size: 12.5px;
+}
+
+@media (max-width: 520px) {
+  .import-card {
+    padding: 26px 20px 22px;
+  }
+
+  .import .wordmark {
+    font-size: 34px;
+  }
+
+  .import-lead {
+    font-size: 15px;
+  }
 }
 
 /* ---- editor shell ----------------------------------------------------- */
