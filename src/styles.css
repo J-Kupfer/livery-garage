@@ -685,6 +685,105 @@ h3 {
   outline-offset: 2px;
 }
 
+.chip-pattern {
+  background-color: var(--raised);
+  background-size: cover;
+  background-position: center top;
+}
+
+.chip-pattern[aria-checked='false'] {
+  opacity: 0.7;
+}
+
+.chip-pattern[aria-checked='false']:hover {
+  opacity: 1;
+}
+
+/* Pattern settings sit under the zone's chips, grouped like a paint shop order card. */
+.pattern-box {
+  display: grid;
+  gap: 14px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(8, 12, 14, 0.22);
+}
+
+.pattern-box .group-title {
+  margin-bottom: 7px;
+}
+
+.pattern-box .field {
+  grid-template-columns: 52px minmax(0, 1fr);
+  margin-top: 0;
+}
+
+.pattern-kinds {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.pattern-kind {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  padding: 5px 5px 6px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: var(--raised);
+  color: var(--dust);
+  font-size: 12.5px;
+}
+
+.pattern-kind img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 4px;
+}
+
+.pattern-kind:hover {
+  color: var(--bone);
+}
+
+.pattern-kind[aria-checked='true'] {
+  border-color: var(--amber);
+  color: var(--bone);
+}
+
+.palettes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.palette {
+  display: flex;
+  width: 28px;
+  height: 18px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 3px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+.palette span {
+  flex: 1;
+}
+
+.palette[aria-pressed='true'] {
+  outline: 2px solid var(--amber);
+  outline-offset: 2px;
+}
+
+.pattern-colors {
+  display: flex;
+  gap: 7px;
+}
+
 .chip-round {
   width: 30px;
   height: 30px;
@@ -892,6 +991,11 @@ h3 {
 .segmented button[aria-pressed='true'] {
   background: var(--raised-hover);
   color: var(--bone);
+}
+
+.btn-wide {
+  width: 100%;
+  margin-top: 14px;
 }
 
 .action-row {

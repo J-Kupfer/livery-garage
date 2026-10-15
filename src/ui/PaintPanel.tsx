@@ -1,7 +1,13 @@
+import { useRef } from 'react';
 import { Pipette } from 'lucide-react';
 import type { CarParts, Look, ZoneLook } from '../lib/composition.ts';
+import { PATTERN_PALETTES, defaultPattern, patternThumbnail, type PatternSpec } from '../lib/patterns.ts';
 import type { PaintZone } from '../lib/templateLayers.ts';
 import { SliderField } from './controls.tsx';
+import { PatternControls } from './PatternControls.tsx';
+
+/** What the pattern chip shows before a pattern is chosen. */
+const PATTERN_HINT: PatternSpec = { kind: 'woodland', colors: [...PATTERN_PALETTES[0].colors], scale: 1, seed: 7 };
 
 const ZONE_LABEL: Record<PaintZone, string> = { body: 'Karosserie', second: 'Zweitfarbe', roof: 'Dach' };
 
@@ -15,7 +21,15 @@ interface Props {
 }
 
 export function PaintPanel({ parts, look, guideOpacity, onZone, onWheels, onGuide }: Props) {
+  // Switching a zone back to a pattern restores the last one instead of rolling a new one.
+  const lastPattern = useRef<Partial<Record<PaintZone, PatternSpec>>>({});
   if (!parts || !look) return <aside className="panel panel-left" />;
+
+  const setPattern = (zone: PaintZone, variant: number, pattern: PatternSpec) => {
+    lastPattern.current[zone] = pattern;
+    onZone(zone, { variant, pattern });
+  };
+
   return (
     <aside className="panel panel-left" aria-label="Lack">
       <section className="panel-section">
@@ -32,7 +46,7 @@ export function PaintPanel({ parts, look, guideOpacity, onZone, onWheels, onGuid
                     key={variant.name + i}
                     type="button"
                     role="radio"
-                    aria-checked={!zoneLook.color && zoneLook.variant === i}
+                    aria-checked={!zoneLook.color && !zoneLook.pattern && zoneLook.variant === i}
                     aria-label={`Werksfarbe ${i + 1}`}
                     title={`Werksfarbe ${i + 1} (${variant.color})`}
                     className="chip"
@@ -41,8 +55,8 @@ export function PaintPanel({ parts, look, guideOpacity, onZone, onWheels, onGuid
                   />
                 ))}
                 <label
-                  className={`chip chip-custom${zoneLook.color ? ' is-active' : ''}`}
-                  style={zoneLook.color ? ({ '--chip': zoneLook.color } as React.CSSProperties) : undefined}
+                  className={`chip chip-custom${zoneLook.color && !zoneLook.pattern ? ' is-active' : ''}`}
+                  style={zoneLook.color && !zoneLook.pattern ? ({ '--chip': zoneLook.color } as React.CSSProperties) : undefined}
                   title={zoneLook.color ? `Eigene Farbe (${zoneLook.color})` : 'Eigene Farbe wählen'}
                 >
                   <input
@@ -51,9 +65,24 @@ export function PaintPanel({ parts, look, guideOpacity, onZone, onWheels, onGuid
                     value={zoneLook.color ?? current.color}
                     onChange={(e) => onZone(zone, { variant: zoneLook.variant, color: e.target.value })}
                   />
-                  {!zoneLook.color && <Pipette size={14} aria-hidden />}
+                  {!(zoneLook.color && !zoneLook.pattern) && <Pipette size={14} aria-hidden />}
                 </label>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={!!zoneLook.pattern}
+                  aria-label={`${ZONE_LABEL[zone]}: Muster`}
+                  title="Muster"
+                  className="chip chip-pattern"
+                  style={{ backgroundImage: `url(${patternThumbnail(zoneLook.pattern ?? PATTERN_HINT)})` }}
+                  onClick={() => {
+                    if (!zoneLook.pattern) setPattern(zone, zoneLook.variant, lastPattern.current[zone] ?? defaultPattern());
+                  }}
+                />
               </div>
+              {zoneLook.pattern && (
+                <PatternControls spec={zoneLook.pattern} onChange={(pattern) => setPattern(zone, zoneLook.variant, pattern)} />
+              )}
             </div>
           );
         })}

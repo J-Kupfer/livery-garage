@@ -1,6 +1,6 @@
 /**
  * The livery canvas: the car template as fixed background and overlay, with the
- * user's layers (logos, images, text, shapes) in between as Fabric objects.
+ * user's layers (logos, images, text, shapes, flames) in between as Fabric objects.
  *
  * Fabric objects are the single source of truth for layers. React reads a derived,
  * immutable snapshot through subscribe/getSnapshot (useSyncExternalStore).
@@ -10,8 +10,10 @@ import {
   Ellipse,
   FabricImage,
   FabricObject,
+  Gradient,
   IText,
   InteractiveFabricObject,
+  Path,
   Point,
   Rect,
   config,
@@ -21,10 +23,12 @@ import {
   type TPointerEventInfo,
 } from 'fabric';
 import { TemplateComposer, defaultLook, type CarParts, type Look, type ZoneLook } from '../lib/composition.ts';
+import { DEFAULT_FLAME_COLORS, FLAME_WIDTH, flamePath } from '../lib/flames.ts';
+import { randomSeed } from '../lib/random.ts';
 import type { PaintZone } from '../lib/templateLayers.ts';
 import { TEXTURE_SIZE, type CarTemplate } from '../lib/templateTypes.ts';
 
-export type LayerKind = 'logo' | 'image' | 'text' | 'shape';
+export type LayerKind = 'logo' | 'image' | 'text' | 'shape' | 'flames';
 
 export type AssetSource = { kind: 'package'; path: string; name: string } | { kind: 'upload'; dataUrl: string; name: string };
 
@@ -67,6 +71,8 @@ export interface LayerProps {
   charSpacing?: number;
   /** Solid recolour of a logo or image, or undefined for the original colours. */
   tint?: string;
+  /** Base, middle and tip colour of a flame layer. */
+  flameColors?: string[];
 }
 
 export type LayerPatch = Partial<Omit<LayerProps, 'id' | 'kind' | 'tint'>> & { tint?: string | null };
@@ -94,6 +100,9 @@ interface Tags {
   kind: LayerKind;
   clip: boolean;
   assetId?: string;
+  /** Flames are regenerated from seed and colours rather than edited point by point. */
+  flameSeed?: number;
+  flameColors?: string[];
 }
 type Tagged = FabricObject & Partial<Tags>;
 const tagged = (o: FabricObject) => o as Tagged;
@@ -104,7 +113,7 @@ const COMMIT_DELAY_MS = 300;
 const ACCENT = '#f2b632';
 const SHAPE_FILL = '#d9572b';
 
-FabricObject.customProperties = ['id', 'layerName', 'kind', 'clip', 'assetId'];
+FabricObject.customProperties = ['id', 'layerName', 'kind', 'clip', 'assetId', 'flameSeed', 'flameColors'];
 Object.assign(InteractiveFabricObject.ownDefaults, {
   transparentCorners: false,
   cornerStyle: 'circle',
@@ -170,6 +179,7 @@ export class LiveryEditor {
   private restoring = false;
   private queue: Promise<unknown> = Promise.resolve();
   private fitted = false;
+  private lookFrame = 0;
 
   private spaceDown = false;
   private panFrom?: { x: number; y: number };
@@ -216,6 +226,7 @@ export class LiveryEditor {
 
   dispose(): void {
     clearTimeout(this.commitTimer);
+    this.cancelLook();
     this.resizeObserver.disconnect();
     window.removeEventListener('keydown', this.onKeyDown);
     window.removeEventListener('keyup', this.onKeyUp);
@@ -295,6 +306,7 @@ export class LiveryEditor {
       props.stroke = typeof o.stroke === 'string' ? o.stroke : undefined;
       props.strokeWidth = o.strokeWidth;
     }
+    if (o.kind === 'flames') props.flameColors = o.flameColors ?? [...DEFAULT_FLAME_COLORS];
     if (o instanceof IText) {
       props.text = o.text;
       props.fontFamily = o.fontFamily;
@@ -314,6 +326,7 @@ export class LiveryEditor {
       this.template = template;
       this.parts = this.composer.setTemplate(template);
       this.look = design?.look ?? defaultLook(this.parts);
+      this.cancelLook();
       this.composer.render(this.look, this.guideOpacity);
       this.canvas.backgroundImage = this.backgroundImage;
       this.canvas.overlayImage = this.overlayImage;
@@ -329,13 +342,13 @@ export class LiveryEditor {
   setZone(zone: PaintZone, zoneLook: ZoneLook): void {
     if (!this.look) return;
     this.look = { ...this.look, zones: { ...this.look.zones, [zone]: zoneLook } };
-    this.renderLook();
+    this.scheduleLook();
   }
 
   setWheels(variant: number): void {
     if (!this.look) return;
     this.look = { ...this.look, wheels: variant };
-    this.renderLook();
+    this.scheduleLook();
   }
 
   setGuideOpacity(opacity: number): void {
@@ -343,6 +356,21 @@ export class LiveryEditor {
     this.composer.renderGuide(opacity);
     this.canvas.requestRenderAll();
     this.emit();
+  }
+
+  /** Paint changes arrive at pointer speed (colour pickers, sliders): recompose once per frame. */
+  private scheduleLook(): void {
+    this.emit();
+    if (this.lookFrame) return;
+    this.lookFrame = requestAnimationFrame(() => {
+      this.lookFrame = 0;
+      this.renderLook();
+    });
+  }
+
+  private cancelLook(): void {
+    cancelAnimationFrame(this.lookFrame);
+    this.lookFrame = 0;
   }
 
   private renderLook(): void {
@@ -406,6 +434,75 @@ export class LiveryEditor {
     const target = Math.min(700, this.visibleWidth() * 0.4);
     if (text.width > target) text.scale(target / text.width);
     this.place(text, 'text', '');
+  }
+
+  addFlames(): void {
+    const flames = this.createFlames(randomSeed(), DEFAULT_FLAME_COLORS);
+    flames.scale(Math.min(820, this.visibleWidth() * 0.5) / FLAME_WIDTH);
+    this.place(flames, 'flames', 'Flammen');
+  }
+
+  /** Replaces the selected flames with a new random shape, keeping placement, colours and outline. */
+  regenerateFlames(): void {
+    const active = this.canvas.getActiveObjects() as Tagged[];
+    if (active.length !== 1 || active[0].kind !== 'flames') return;
+    const old = active[0];
+    const fresh = this.createFlames(randomSeed(), old.flameColors ?? DEFAULT_FLAME_COLORS);
+    fresh.set({
+      left: old.left,
+      top: old.top,
+      scaleX: old.scaleX,
+      scaleY: old.scaleY,
+      angle: old.angle,
+      flipX: old.flipX,
+      flipY: old.flipY,
+      opacity: old.opacity,
+      stroke: old.stroke,
+      strokeWidth: old.strokeWidth,
+    });
+    Object.assign(fresh, { id: old.id, layerName: old.layerName, kind: old.kind, clip: old.clip });
+    this.applyClip(fresh);
+    const index = this.canvas.getObjects().indexOf(old);
+    // Swap without the add/remove events: it is one change, not two.
+    this.restoring = true;
+    try {
+      this.canvas.remove(old);
+      this.canvas.insertAt(index, fresh);
+    } finally {
+      this.restoring = false;
+    }
+    this.canvas.setActiveObject(fresh);
+    this.canvas.requestRenderAll();
+    this.changed();
+  }
+
+  private flameGradient(colors: readonly string[]): Gradient<'linear'> {
+    return new Gradient({
+      type: 'linear',
+      gradientUnits: 'percentage',
+      coords: { x1: 0, y1: 0, x2: 1, y2: 0 },
+      colorStops: [
+        { offset: 0.1, color: colors[0] },
+        { offset: 0.5, color: colors[1] },
+        { offset: 0.92, color: colors[2] },
+      ],
+    });
+  }
+
+  private createFlames(seed: number, colors: readonly string[]): Tagged & Path {
+    const flames = new Path(flamePath(seed), {
+      fill: this.flameGradient(colors),
+      stroke: '#1d1a10',
+      // Stroke first: the fill hides the inner half and the lines between overlapping
+      // licks, leaving one outline around the whole flame.
+      paintFirst: 'stroke',
+      strokeWidth: 12,
+      strokeLineJoin: 'round',
+      strokeUniform: true,
+    }) as Tagged & Path;
+    flames.flameSeed = seed;
+    flames.flameColors = [...colors];
+    return flames;
   }
 
   addShape(shape: 'stripe' | 'rect' | 'circle'): void {
@@ -507,11 +604,15 @@ export class LiveryEditor {
     const active = this.canvas.getActiveObjects() as Tagged[];
     if (active.length !== 1) return;
     const o = active[0];
-    const { name, clip, tint, ...rest } = patch;
+    const { name, clip, tint, flameColors, ...rest } = patch;
     if (name !== undefined) o.layerName = name;
     if (clip !== undefined) {
       o.clip = clip;
       this.applyClip(o);
+    }
+    if (flameColors && o.kind === 'flames') {
+      o.flameColors = [...flameColors];
+      o.set('fill', this.flameGradient(flameColors));
     }
     if (tint !== undefined && o instanceof FabricImage) {
       o.filters = tint ? [new filters.BlendColor({ color: tint, mode: 'tint', alpha: 1 })] : [];
@@ -634,6 +735,7 @@ export class LiveryEditor {
     const { look, objects } = JSON.parse(state) as { look: Look; objects: Record<string, unknown>[] };
     this.present = state;
     this.look = look;
+    this.cancelLook();
     this.composer.render(look, this.guideOpacity);
     await this.replaceObjects(await this.restoreObjects(objects));
     this.revision++;
@@ -686,6 +788,10 @@ export class LiveryEditor {
 
   /** The livery texture at full resolution, without guide or selection. */
   renderTexture(): HTMLCanvasElement {
+    if (this.lookFrame) {
+      this.cancelLook();
+      this.renderLook();
+    }
     const { canvas } = this;
     const vpt = [...canvas.viewportTransform] as TMat2D;
     canvas.overlayImage = this.exportOverlayImage;

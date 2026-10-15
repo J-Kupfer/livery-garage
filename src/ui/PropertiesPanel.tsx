@@ -1,7 +1,9 @@
-import { Copy, FlipHorizontal2, FlipVertical2, Trash2 } from 'lucide-react';
+import { Copy, Dices, FlipHorizontal2, FlipVertical2, Trash2 } from 'lucide-react';
 import type { LayerInfo, LayerProps, LiveryEditor } from '../editor/LiveryEditor.ts';
 import { DECAL_FONTS, fontWeightFor } from '../lib/fonts.ts';
 import { ColorField, Field, SliderField, Switch } from './controls.tsx';
+
+const FLAME_COLOR_LABELS = ['Ansatz', 'Mitte', 'Spitzen'];
 
 interface Props {
   editor: LiveryEditor;
@@ -100,6 +102,24 @@ export function PropertiesPanel({ editor, selected, selectionCount, layers }: Pr
           <ColorField label="Farbe" value={selected.fill ?? '#ffffff'} onChange={(fill) => update({ fill })} />
           <ColorField label="Kontur" value={selected.stroke ?? '#1d1d1f'} onChange={(stroke) => update({ stroke })} />
           <SliderField label="Konturbreite" value={selected.strokeWidth ?? 0} min={0} max={40} onChange={(strokeWidth) => update({ strokeWidth })} />
+        </>
+      )}
+
+      {selected.kind === 'flames' && selected.flameColors && (
+        <>
+          {FLAME_COLOR_LABELS.map((label, i) => (
+            <ColorField
+              key={label}
+              label={label}
+              value={selected.flameColors![i]}
+              onChange={(color) => update({ flameColors: selected.flameColors!.map((c, j) => (j === i ? color : c)) })}
+            />
+          ))}
+          <ColorField label="Kontur" value={selected.stroke ?? '#1d1a10'} onChange={(stroke) => update({ stroke })} />
+          <SliderField label="Konturbreite" value={selected.strokeWidth ?? 0} min={0} max={60} onChange={(strokeWidth) => update({ strokeWidth })} />
+          <button type="button" className="btn btn-quiet btn-wide" onClick={() => editor.regenerateFlames()}>
+            <Dices size={16} aria-hidden /> Neue Flammen würfeln
+          </button>
         </>
       )}
 

@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Circle, Eye, EyeOff, Image, Lock, LockOpen, RectangleHorizontal, Shapes, Sticker, Type, Upload } from 'lucide-react';
+import { Circle, Eye, EyeOff, Flame, Image, Lock, LockOpen, RectangleHorizontal, Shapes, Sticker, Type, Upload } from 'lucide-react';
 import type { LayerInfo, LayerKind, LiveryEditor } from '../editor/LiveryEditor.ts';
 import { DEFAULT_DECAL_FONT } from '../lib/fonts.ts';
 
-const KIND_ICON: Record<LayerKind, typeof Type> = { logo: Sticker, image: Image, text: Type, shape: Shapes };
+const KIND_ICON: Record<LayerKind, typeof Type> = { logo: Sticker, image: Image, text: Type, shape: Shapes, flames: Flame };
 
 interface Props {
   editor: LiveryEditor;
@@ -30,8 +30,9 @@ export function LayersPanel({ editor, layers, selection, disabled, onPickLogo, o
     return () => document.removeEventListener('pointerdown', close);
   }, [shapesOpen]);
 
-  const addShape = (shape: 'stripe' | 'rect' | 'circle') => {
-    editor.addShape(shape);
+  const addShape = (shape: 'stripe' | 'rect' | 'circle' | 'flames') => {
+    if (shape === 'flames') editor.addFlames();
+    else editor.addShape(shape);
     setShapesOpen(false);
   };
 
@@ -77,6 +78,9 @@ export function LayersPanel({ editor, layers, selection, disabled, onPickLogo, o
               </button>
               <button type="button" role="menuitem" onClick={() => addShape('circle')}>
                 <Circle size={16} aria-hidden /> Kreis
+              </button>
+              <button type="button" role="menuitem" onClick={() => addShape('flames')}>
+                <Flame size={16} aria-hidden /> Flammen
               </button>
             </div>
           )}

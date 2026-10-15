@@ -8,8 +8,9 @@ Du malst auf den offiziellen Vorlagen, legst Logos, Text und Formen darauf und b
 ## Was der Editor kann
 
 - Das offizielle Vorlagen-Paket (Zip mit 21 PSDs) direkt im Browser einlesen, ohne Photoshop.
-- Lack pro Zone wählen: Karosserie, Zweitfarbe oder Dach, mit den Werksfarben oder einer eigenen Farbe, dazu die Felgen-Varianten.
-- Ebenen hinzufügen: Sponsor-Logos aus dem Paket, eigene Bilder, Text in acht Schriften, Streifen, Rechtecke und Kreise.
+- Lack pro Zone wählen: Karosserie, Zweitfarbe oder Dach, mit den Werksfarben, einer eigenen Farbe oder einem Muster, dazu die Felgen-Varianten.
+- Muster als Lack: Woodland-Tarn, Digital-Tarn und Tigerstreifen, mit Farbvorlagen (Woodland, Wüste, Winter, Urban, Marine, 70er) oder eigenen Farben, einstellbarer Größe und „Neu würfeln“.
+- Ebenen hinzufügen: Sponsor-Logos aus dem Paket, eigene Bilder, Text in acht Schriften, Streifen, Rechtecke, Kreise und Hot-Rod-Flammen mit Farbverlauf.
 - Ebenen auf den sichtbaren Lack zuschneiden, damit Fenster, Lichter und Anbauteile frei bleiben.
 - Rückgängig und Wiederholen, automatisches Speichern pro Auto, Designs als Datei mit Freunden teilen.
 - Export als fertiges Zip für mod.io.
@@ -90,6 +91,8 @@ Es zeigt, ob neue Autos oder umbenannte Ebenen dazugekommen sind.
 - `src/lib/templatePackage.ts` liest Zip und PSDs in einem Web Worker (ag-psd), skaliert die Ebenen auf 2048 und schneidet die Logos zu.
 - `src/lib/templateLayers.ts` ordnet die von Hand benannten Ebenen Rollen zu (Lackzone, Felgen, Details, UV-Gitter).
 - `src/lib/composition.ts` baut daraus Hintergrund, Overlay und die Maske der sichtbaren Lackfläche, in der Ebenen-Reihenfolge der PSD.
+- `src/lib/patterns.ts` erzeugt die Tarnmuster aus Rauschen; ein Muster ist nur Art, Farben, Größe und Zufallswert, das Bild entsteht jedes Mal gleich neu.
+- `src/lib/flames.ts` erzeugt die Flammen-Umrisse aus einem Zufallswert.
 - `src/editor/LiveryEditor.ts` ist die Zeichenfläche (Fabric.js) mit Ebenen, Verlauf und Export-Rendering.
 - `src/lib/modExport.ts` schreibt Manifest, Zip und den `LocalLiveries`-Ordner.
 - `src/ui/` enthält die React-Oberfläche.
@@ -102,4 +105,5 @@ Zwei Vorlagen heißen anders als ihr Auto: `BullV1` ist `Bull`, `DingDing` ist `
 - Gemalt wird auf dem flachen UV-Layout, es gibt keine 3D-Vorschau im Browser.
   Die 3D-Ansicht liefert das Spiel selbst über „Refresh local mods“.
 - Ein Motiv, das über mehrere Karosserieteile laufen soll, muss pro Teil gesetzt werden.
+  Muster laufen an den Kanten der Teile nicht nahtlos weiter; bei Tarnmustern fällt das kaum auf.
 - Ein Design pro Auto; Mods mit mehreren Lackierungen (Team-Pakete) kann der Editor noch nicht bauen.

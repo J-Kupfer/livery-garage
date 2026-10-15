@@ -66,4 +66,46 @@ describe('parseDesign', () => {
     expect(parsed.design.objects.map((o) => o.id)).toEqual(['ok']);
     expect(Object.keys(parsed.design.assets)).toEqual(['upload']);
   });
+
+  it('keeps valid patterns and repairs or drops broken paint settings', () => {
+    const parsed = parseDesign(
+      JSON.stringify(
+        design({
+          look: {
+            zones: {
+              body: { variant: 1, pattern: { kind: 'digital', colors: ['#111111', '#222222', '#333333', '#444444'], scale: 5, seed: 8 } },
+              roof: { variant: -3, color: 'url(https://example.com)', pattern: { kind: 'unknown' } },
+              second: 'nonsense',
+            },
+            wheels: 2.7,
+          },
+        }),
+      ),
+      known,
+    );
+    expect(parsed.design.look).toEqual({
+      zones: {
+        body: { variant: 1, pattern: { kind: 'digital', colors: ['#111111', '#222222', '#333333', '#444444'], scale: 2, seed: 8 } },
+        roof: { variant: 0 },
+      },
+      wheels: 2,
+    });
+  });
+
+  it('accepts flame layers with a gradient fill but not image patterns', () => {
+    const gradient = { type: 'linear', coords: { x1: 0, y1: 0, x2: 1, y2: 0 }, colorStops: [{ offset: 0, color: '#ffd23f' }] };
+    const parsed = parseDesign(
+      JSON.stringify(
+        design({
+          objects: [
+            { type: 'Path', path: [['M', 0, 0], ['L', 10, 0], ['Z']], fill: gradient, kind: 'flames', id: 'flames' },
+            { type: 'Path', path: [['M', 0, 0]], fill: { type: 'pattern', source: 'https://example.com/a.png' }, id: 'pattern' },
+            { type: 'Path', path: [['M', 0, 0]], fill: { ...gradient, source: 'https://example.com/a.png' }, id: 'sneaky' },
+          ],
+        }),
+      ),
+      known,
+    );
+    expect(parsed.design.objects.map((o) => o.id)).toEqual(['flames']);
+  });
 });

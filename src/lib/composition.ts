@@ -7,19 +7,25 @@
  *   overlay     the remaining layers: windows, lights, trim drawn above the paint
  *
  * Paint layers in the templates are flat colours (verified for all 21 cars), so a
- * custom colour is the layer's alpha filled with that colour.
+ * custom colour is the layer's alpha filled with that colour, and a pattern is the
+ * layer's alpha filled with the pattern.
  */
+import { patternCanvas, type PatternSpec } from './patterns.ts';
 import type { PaintZone } from './templateLayers.ts';
 import { TEXTURE_SIZE, type CarTemplate, type TemplateLayer } from './templateTypes.ts';
 
 export const ZONE_ORDER: readonly PaintZone[] = ['body', 'second', 'roof'];
 
 export interface ZoneLook {
-  /** Index into the zone's variants: decides the shape and, without `color`, the colour. */
+  /** Index into the zone's variants: decides the shape and, without `color` or `pattern`, the colour. */
   variant: number;
   /** Custom #rrggbb colour painted into the variant's shape. */
   color?: string;
+  /** Pattern painted into the variant's shape; wins over `color`. */
+  pattern?: PatternSpec;
 }
+
+type Paint = { color?: string; pattern?: PatternSpec };
 
 export interface Look {
   zones: Partial<Record<PaintZone, ZoneLook>>;
@@ -98,7 +104,7 @@ export class TemplateComposer {
         this.draw(over, layer);
         return;
       }
-      this.draw(bg, layer, selection.color);
+      this.draw(bg, layer, selection);
       mask.globalCompositeOperation = layer.cls.role === 'paint' ? 'source-over' : 'destination-out';
       mask.drawImage(layer.bitmap, layer.x, layer.y);
     });
@@ -119,16 +125,18 @@ export class TemplateComposer {
     }
   }
 
-  private selection(layer: TemplateLayer, look: Look, parts: CarParts): { selected: boolean; color?: string } {
+  private selection(layer: TemplateLayer, look: Look, parts: CarParts): { selected: boolean } & Paint {
     switch (layer.cls.role) {
       case 'paint': {
         const zone = layer.cls.zone;
         const variants = parts.zones.find((z) => z.zone === zone)?.variants ?? [];
         const zoneLook = look.zones[zone] ?? { variant: visibleIndex(variants) };
-        return { selected: variants[zoneLook.variant] === layer, color: zoneLook.color };
+        // Designs may come from files or older versions; an unknown variant must not drop the zone.
+        const variant = Math.min(Math.max(0, Math.trunc(zoneLook.variant) || 0), variants.length - 1);
+        return { selected: variants[variant] === layer, color: zoneLook.color, pattern: zoneLook.pattern };
       }
       case 'wheels':
-        return { selected: parts.wheels[look.wheels] === layer };
+        return { selected: parts.wheels[Math.min(Math.max(0, Math.trunc(look.wheels) || 0), parts.wheels.length - 1)] === layer };
       case 'uv':
         return { selected: false };
       default:
@@ -136,21 +144,28 @@ export class TemplateComposer {
     }
   }
 
-  private draw(ctx: CanvasRenderingContext2D, layer: TemplateLayer, color?: string): void {
+  private draw(ctx: CanvasRenderingContext2D, layer: TemplateLayer, paint: Paint = {}): void {
     ctx.globalAlpha = layer.opacity;
-    ctx.drawImage(color ? this.tinted(layer, color) : layer.bitmap, layer.x, layer.y);
+    ctx.drawImage(paint.pattern || paint.color ? this.painted(layer, paint) : layer.bitmap, layer.x, layer.y);
     ctx.globalAlpha = 1;
   }
 
-  private tinted(layer: TemplateLayer, color: string): HTMLCanvasElement {
+  /** The layer's shape filled with a colour or a pattern. */
+  private painted(layer: TemplateLayer, { color, pattern }: Paint): HTMLCanvasElement {
     const { scratch } = this;
-    scratch.width = layer.bitmap.width;
-    scratch.height = layer.bitmap.height;
+    const { width, height } = layer.bitmap;
+    scratch.width = width;
+    scratch.height = height;
     const ctx = context(scratch);
     ctx.drawImage(layer.bitmap, 0, 0);
     ctx.globalCompositeOperation = 'source-in';
-    ctx.fillStyle = color;
-    ctx.fillRect(0, 0, scratch.width, scratch.height);
+    if (pattern) {
+      // The pattern lives in texture coordinates, so zones sharing a pattern line up.
+      ctx.drawImage(patternCanvas(pattern), layer.x, layer.y, width, height, 0, 0, width, height);
+    } else {
+      ctx.fillStyle = color!;
+      ctx.fillRect(0, 0, width, height);
+    }
     ctx.globalCompositeOperation = 'source-over';
     return scratch;
   }
