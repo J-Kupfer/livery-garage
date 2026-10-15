@@ -15,7 +15,13 @@ Du malst auf den offiziellen Vorlagen, legst Logos, Text und Formen darauf und b
 - Export als fertiges Zip für mod.io.
 - Direkt in den Ordner `LocalLiveries` des Spiels schreiben, auf Wunsch live nach jeder Änderung.
 
-## Starten
+## Online nutzen
+
+Der Editor läuft ohne Installation unter <https://j-kupfer.github.io/livery-garage/>.
+Für „Ins Spiel senden“ die Seite in Chrome oder Edge auf dem Windows-Rechner öffnen, auf dem over the hill läuft.
+Das Vorlagen-Paket lädt jede Person selbst, es bleibt im eigenen Browser.
+
+## Lokal starten
 
 Voraussetzung ist Node.js 22.18 oder neuer.
 
