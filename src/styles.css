@@ -518,6 +518,8 @@ h3 {
   left: 0;
   z-index: 20;
   display: grid;
+  /* As wide as the longest entry, not limited by the small button it hangs from. */
+  width: max-content;
   min-width: 180px;
   padding: 5px;
   border: 1px solid var(--line);
@@ -530,6 +532,12 @@ h3 {
   left: auto;
   right: 0;
   min-width: 250px;
+}
+
+/* The add bar sits at the window's right edge: its menus open towards the left. */
+.add-bar .menu {
+  left: auto;
+  right: 0;
 }
 
 .menu button {
