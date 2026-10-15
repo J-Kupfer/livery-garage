@@ -787,17 +787,6 @@ export class LiveryEditor {
       canvas.setCursor(this.spaceDown ? 'grab' : 'default');
       this.emit();
     });
-
-    canvas.on('after:render', ({ ctx }) => {
-      // Thin frame around the texture so its edge stays visible on the dark workspace.
-      const vpt = canvas.viewportTransform;
-      ctx.save();
-      ctx.setTransform(vpt[0], vpt[1], vpt[2], vpt[3], vpt[4], vpt[5]);
-      ctx.lineWidth = 1 / canvas.getZoom();
-      ctx.strokeStyle = 'rgba(255, 255, 255, 0.14)';
-      ctx.strokeRect(0, 0, TEXTURE_SIZE, TEXTURE_SIZE);
-      ctx.restore();
-    });
   }
 
   private setPanMode(on: boolean): void {
