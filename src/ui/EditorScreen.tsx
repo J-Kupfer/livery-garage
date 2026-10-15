@@ -458,6 +458,7 @@ export function EditorScreen({ client, index, onForgetPackage }: Props) {
         guideOpacity={snap.guideOpacity}
         onZone={(zone, look) => editor?.setZone(zone, look)}
         onWheels={(variant) => editor?.setWheels(variant)}
+        onWeathering={(weathering) => editor?.setWeathering(weathering)}
         onGuide={(opacity) => {
           editor?.setGuideOpacity(opacity);
           writeSetting(GUIDE_KEY, String(opacity));

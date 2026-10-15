@@ -1,9 +1,16 @@
 import { Copy, Dices, FlipHorizontal2, FlipVertical2, Trash2 } from 'lucide-react';
-import type { LayerInfo, LayerProps, LiveryEditor } from '../editor/LiveryEditor.ts';
+import type { ClipMode, LayerInfo, LayerProps, LiveryEditor } from '../editor/LiveryEditor.ts';
 import { DECAL_FONTS, fontWeightFor } from '../lib/fonts.ts';
+import { STICKER_STYLES } from '../lib/stickers.ts';
 import { ColorField, Field, SliderField, Switch } from './controls.tsx';
 
 const FLAME_COLOR_LABELS = ['Ansatz', 'Mitte', 'Spitzen'];
+
+const CLIP_MODES: readonly { mode: ClipMode; label: string; hint: string }[] = [
+  { mode: 'paint', label: 'Lack', hint: 'Nur auf dem Lack, unter Fenstern, Lichtern und Anbauteilen.' },
+  { mode: 'windows', label: 'Scheiben', hint: 'Nur auf den Fensterscheiben, zum Beispiel als Sonnenblende.' },
+  { mode: 'none', label: 'Frei', hint: 'Ohne Zuschnitt, unter Fenstern und Lichtern.' },
+];
 
 interface Props {
   editor: LiveryEditor;
@@ -123,6 +130,61 @@ export function PropertiesPanel({ editor, selected, selectionCount, layers }: Pr
         </>
       )}
 
+      {selected.kind === 'sticker' && selected.sticker && (
+        <>
+          <Field label="Form">
+            <div className="segmented" role="radiogroup" aria-label="Sticker-Form">
+              {STICKER_STYLES.map(({ style, label }) => (
+                <button
+                  key={style}
+                  type="button"
+                  role="radio"
+                  aria-checked={selected.sticker!.style === style}
+                  aria-pressed={selected.sticker!.style === style}
+                  onClick={() => update({ sticker: { style } })}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </Field>
+          <Field label="Text" htmlFor="sticker-text">
+            <input
+              id="sticker-text"
+              className="input"
+              value={selected.sticker.text}
+              maxLength={40}
+              onChange={(e) => update({ sticker: { text: e.target.value } })}
+            />
+          </Field>
+          <Field label="Schrift" htmlFor="sticker-font">
+            <select
+              id="sticker-font"
+              className="input select"
+              value={selected.sticker.fontFamily}
+              style={{ fontFamily: `"${selected.sticker.fontFamily}"`, fontWeight: fontWeightFor(selected.sticker.fontFamily) }}
+              onChange={(e) => update({ sticker: { fontFamily: e.target.value } })}
+            >
+              {DECAL_FONTS.map((f) => (
+                <option key={f.family} value={f.family} style={{ fontFamily: `"${f.family}"`, fontWeight: f.weight }}>
+                  {f.family}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <ColorField label="Hintergrund" value={selected.sticker.background} onChange={(background) => update({ sticker: { background } })} />
+          <ColorField label="Schriftfarbe" value={selected.sticker.color} onChange={(color) => update({ sticker: { color } })} />
+          <ColorField label="Rand" value={selected.sticker.outline} onChange={(outline) => update({ sticker: { outline } })} />
+          <SliderField
+            label="Randbreite"
+            value={selected.sticker.outlineWidth}
+            min={0}
+            max={40}
+            onChange={(outlineWidth) => update({ sticker: { outlineWidth } })}
+          />
+        </>
+      )}
+
       {(selected.kind === 'logo' || selected.kind === 'image') && (
         <>
           <Switch
@@ -149,12 +211,16 @@ export function PropertiesPanel({ editor, selected, selectionCount, layers }: Pr
         </div>
       </Field>
 
-      <Switch
-        label="Nur auf dem Lack"
-        hint="Schneidet die Ebene an Fenstern, Lichtern und Anbauteilen ab"
-        checked={selected.clip}
-        onChange={(clip) => update({ clip })}
-      />
+      <Field label="Bereich">
+        <div className="segmented" role="radiogroup" aria-label="Bereich">
+          {CLIP_MODES.map(({ mode, label }) => (
+            <button key={mode} type="button" role="radio" aria-checked={selected.clip === mode} aria-pressed={selected.clip === mode} onClick={() => update({ clip: mode })}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </Field>
+      <p className="field-hint">{CLIP_MODES.find((m) => m.mode === selected.clip)?.hint}</p>
 
       <Field label="Reihenfolge">
         <div className="segmented">

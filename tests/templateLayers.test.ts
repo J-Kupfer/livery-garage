@@ -47,7 +47,8 @@ describe('classifyLayer', () => {
     ['uv', 'uv'],
     ['extra2', 'detail'],
     ['metal parts', 'detail'],
-    ['window', 'detail'],
+    ['window', 'windows'],
+    ['windows', 'windows'],
     ['wood1', 'detail'],
   ])('classifies %j as %s', (name, expected) => {
     expect(label(name, 3)).toBe(expected);
@@ -63,9 +64,10 @@ describe('classifyLayer', () => {
     expect(labels[0]).toBe('base');
     expect(labels.filter((l) => l === 'base')).toHaveLength(1);
     expect(labels.filter((l) => l === 'uv')).toHaveLength(1);
+    expect(labels.filter((l) => l === 'windows')).toHaveLength(1);
     expect(labels).toContain('paint:body');
     // Every layer the classifier does not know is drawn as-is, so list them explicitly.
     const details = names.filter((_, i) => labels[i] === 'detail').map((n) => n.toLowerCase().replace(/\s+/g, ''));
-    for (const detail of details) expect(detail).toMatch(/^(extra\d*|lights|windows?|wood\d*|metalparts)$/);
+    for (const detail of details) expect(detail).toMatch(/^(extra\d*|lights|wood\d*|metalparts)$/);
   });
 });

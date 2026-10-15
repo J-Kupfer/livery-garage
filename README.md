@@ -9,9 +9,10 @@ Du malst auf den offiziellen Vorlagen, legst Logos, Text und Formen darauf und b
 
 - Das offizielle Vorlagen-Paket (Zip mit 21 PSDs) direkt im Browser einlesen, ohne Photoshop.
 - Lack pro Zone wählen: Karosserie, Zweitfarbe oder Dach, mit den Werksfarben, einer eigenen Farbe oder einem Muster, dazu die Felgen-Varianten.
-- Muster als Lack: Woodland-Tarn, Digital-Tarn und Tigerstreifen, mit Farbvorlagen (Woodland, Wüste, Winter, Urban, Marine, 70er) oder eigenen Farben, einstellbarer Größe und „Neu würfeln“.
-- Ebenen hinzufügen: Sponsor-Logos aus dem Paket, eigene Bilder, Text in acht Schriften, Streifen, Rechtecke, Kreise und Hot-Rod-Flammen mit Farbverlauf.
-- Ebenen auf den sichtbaren Lack zuschneiden, damit Fenster, Lichter und Anbauteile frei bleiben.
+- Muster als Lack: Woodland, Digital-Tarn, Tigerstreifen, Flecktarn, Zebra und Leopard, mit Farbvorlagen oder eigenen Farben, einstellbarer Größe und „Neu würfeln“.
+- Gebrauchsspuren: Rost und Kratzer mit je einem Regler; Dreck und Staub macht das Spiel selbst.
+- Ebenen hinzufügen: Sponsor-Logos aus dem Paket, eigene Bilder, Text in acht Schriften, Streifen, Rechtecke, Kreise, Hot-Rod-Flammen mit Farbverlauf und Sticker (Startnummer rund oder als Schild, Sonnenblende, Zielflagge).
+- Jede Ebene hat einen Bereich: „Lack“ (unter Fenstern und Lichtern, auf den Lack zugeschnitten), „Scheiben“ (auf den Fensterscheiben, etwa als Sonnenblende) oder „Frei“.
 - Rückgängig und Wiederholen, automatisches Speichern pro Auto, Designs als Datei mit Freunden teilen.
 - Export als fertiges Zip für mod.io.
 - Direkt in den Ordner `LocalLiveries` des Spiels schreiben, auf Wunsch live nach jeder Änderung.
@@ -93,6 +94,7 @@ Es zeigt, ob neue Autos oder umbenannte Ebenen dazugekommen sind.
 - `src/lib/composition.ts` baut daraus Hintergrund, Overlay und die Maske der sichtbaren Lackfläche, in der Ebenen-Reihenfolge der PSD.
 - `src/lib/patterns.ts` erzeugt die Tarnmuster aus Rauschen; ein Muster ist nur Art, Farben, Größe und Zufallswert, das Bild entsteht jedes Mal gleich neu.
 - `src/lib/flames.ts` erzeugt die Flammen-Umrisse aus einem Zufallswert.
+- `src/lib/weathering.ts` erzeugt Rost und Kratzer, `src/lib/stickers.ts` beschreibt die Sticker-Vorlagen.
 - `src/editor/LiveryEditor.ts` ist die Zeichenfläche (Fabric.js) mit Ebenen, Verlauf und Export-Rendering.
 - `src/lib/modExport.ts` schreibt Manifest, Zip und den `LocalLiveries`-Ordner.
 - `src/ui/` enthält die React-Oberfläche.

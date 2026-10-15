@@ -993,6 +993,12 @@ h3 {
   color: var(--bone);
 }
 
+.field-hint {
+  margin: 6px 0 0 94px;
+  color: var(--dim);
+  font-size: 12.5px;
+}
+
 .btn-wide {
   width: 100%;
   margin-top: 14px;
@@ -1015,7 +1021,7 @@ h3 {
 
 .add-bar {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 6px;
   margin-bottom: 18px;
 }
@@ -1103,6 +1109,17 @@ h3 {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.layer-group {
+  padding: 10px 0 4px 2px;
+  color: var(--dim);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.layer-group:first-child {
+  padding-top: 0;
 }
 
 .layer-name-input {

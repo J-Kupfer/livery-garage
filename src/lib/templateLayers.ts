@@ -15,7 +15,9 @@ export type LayerClass =
   | { role: 'wheels' }
   /** UV wireframe: an editing guide, never part of the exported livery. */
   | { role: 'uv' }
-  /** Everything drawn as-is: trim ("extra"), lights, windows, wood, metal parts. */
+  /** Window glass: drawn as-is, and the area layers on the windows are clipped to. */
+  | { role: 'windows' }
+  /** Everything else drawn as-is: trim ("extra"), lights, wood, metal parts. */
   | { role: 'detail' };
 
 const PAINT_PATTERNS: ReadonlyArray<readonly [RegExp, PaintZone]> = [
@@ -30,6 +32,7 @@ export function classifyLayer(name: string, index: number): LayerClass {
   // The Mammoth template calls its base layer "Layer 2".
   if (n === 'base' || (index === 0 && /^layer\d*$/.test(n))) return { role: 'base' };
   if (n === 'uv') return { role: 'uv' };
+  if (/^windows?$/.test(n)) return { role: 'windows' };
   if (/^wheels?\d*$/.test(n)) return { role: 'wheels' };
   for (const [pattern, zone] of PAINT_PATTERNS) {
     if (pattern.test(n)) return { role: 'paint', zone };

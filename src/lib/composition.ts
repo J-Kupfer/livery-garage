@@ -3,14 +3,18 @@
  * layers, following the PSD's own layer order:
  *
  *   background  every selected layer up to the top-most paint layer (with the chosen paint)
- *   (user layers, clipped to paintMask)
+ *   (user layers on the paint, clipped to paintMask)
+ *   weathering  rust and scratches, clipped to the visible paint
  *   overlay     the remaining layers: windows, lights, trim drawn above the paint
+ *   (user layers on the windows, clipped to windowsMask)
+ *   guide       the UV wireframe, only while editing
  *
  * Paint layers in the templates are flat colours (verified for all 21 cars), so a
  * custom colour is the layer's alpha filled with that colour, and a pattern is the
  * layer's alpha filled with the pattern.
  */
 import { patternCanvas, type PatternSpec } from './patterns.ts';
+import { hasWeathering, paintWeathering, type Weathering } from './weathering.ts';
 import type { PaintZone } from './templateLayers.ts';
 import { TEXTURE_SIZE, type CarTemplate, type TemplateLayer } from './templateTypes.ts';
 
@@ -30,6 +34,7 @@ type Paint = { color?: string; pattern?: PatternSpec };
 export interface Look {
   zones: Partial<Record<PaintZone, ZoneLook>>;
   wheels: number;
+  weathering?: Weathering;
 }
 
 export interface CarParts {
@@ -72,13 +77,20 @@ function context(canvas: HTMLCanvasElement): CanvasRenderingContext2D {
 
 export class TemplateComposer {
   readonly background = textureCanvas();
-  /** Layers above the paint, as exported. */
+  /** Layers above the paint: windows, lights, trim. */
   readonly overlay = textureCanvas();
-  /** `overlay` plus the UV wireframe guide, as shown while editing. */
-  readonly overlayWithGuide = textureCanvas();
+  /** The UV wireframe at the chosen opacity; never exported. */
+  readonly guide = textureCanvas();
+  /** Rust and scratches over the paint. */
+  readonly weathering = textureCanvas();
   /** Alpha = paint that is actually visible, i.e. not covered by details stacked between paint zones. */
   readonly paintMask = textureCanvas();
+  /** Alpha = window glass. */
+  readonly windowsMask = textureCanvas();
   private readonly scratch = document.createElement('canvas');
+  /** Unmasked weathering, regenerated only when its settings change, not on every paint change. */
+  private readonly weatheringCache = document.createElement('canvas');
+  private weatheringKey = '';
   private template?: CarTemplate;
   private parts?: CarParts;
 
@@ -94,12 +106,14 @@ export class TemplateComposer {
     const bg = context(this.background);
     const over = context(this.overlay);
     const mask = context(this.paintMask);
-    for (const ctx of [bg, over, mask]) ctx.clearRect(0, 0, TEXTURE_SIZE, TEXTURE_SIZE);
+    const glass = context(this.windowsMask);
+    for (const ctx of [bg, over, mask, glass]) ctx.clearRect(0, 0, TEXTURE_SIZE, TEXTURE_SIZE);
 
     const top = template.layers.findLastIndex((l) => l.cls.role === 'paint');
     template.layers.forEach((layer, index) => {
       const selection = this.selection(layer, look, parts);
       if (!selection.selected) return;
+      if (layer.cls.role === 'windows') glass.drawImage(layer.bitmap, layer.x, layer.y);
       if (index > top) {
         this.draw(over, layer);
         return;
@@ -109,14 +123,30 @@ export class TemplateComposer {
       mask.drawImage(layer.bitmap, layer.x, layer.y);
     });
     mask.globalCompositeOperation = 'source-over';
+    this.renderWeathering(look.weathering);
     this.renderGuide(guideOpacity);
   }
 
-  /** Redraws only the editing overlay, e.g. when the wireframe is toggled. */
-  renderGuide(opacity: number): void {
-    const ctx = context(this.overlayWithGuide);
+  private renderWeathering(weathering: Weathering | undefined): void {
+    const ctx = context(this.weathering);
     ctx.clearRect(0, 0, TEXTURE_SIZE, TEXTURE_SIZE);
-    ctx.drawImage(this.overlay, 0, 0);
+    if (!hasWeathering(weathering)) return;
+    const key = `${weathering.rust}|${weathering.scratches}|${weathering.seed}`;
+    if (key !== this.weatheringKey) {
+      paintWeathering(this.weatheringCache, weathering);
+      this.weatheringKey = key;
+    }
+    ctx.drawImage(this.weatheringCache, 0, 0);
+    // Wear only shows on the visible paint, never on glass, lights or trim.
+    ctx.globalCompositeOperation = 'destination-in';
+    ctx.drawImage(this.paintMask, 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  /** Redraws only the UV wireframe, e.g. when its opacity changes. */
+  renderGuide(opacity: number): void {
+    const ctx = context(this.guide);
+    ctx.clearRect(0, 0, TEXTURE_SIZE, TEXTURE_SIZE);
     const uv = this.parts?.uv;
     if (uv && opacity > 0) {
       ctx.globalAlpha = uv.opacity * opacity;

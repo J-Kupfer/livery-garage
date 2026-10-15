@@ -6,10 +6,14 @@
 import type { AssetSource, DesignData } from '../editor/LiveryEditor.ts';
 import { ZONE_ORDER, type Look } from './composition.ts';
 import { sanitizePattern } from './patterns.ts';
+import { sanitizeSticker } from './stickers.ts';
+import { sanitizeWeathering } from './weathering.ts';
 
 export const DESIGN_FILE_SUFFIX = '.livery.json';
 
-const OBJECT_TYPES = new Set(['image', 'itext', 'rect', 'ellipse', 'path']);
+const OBJECT_TYPES = new Set(['image', 'itext', 'rect', 'ellipse', 'path', 'group']);
+/** What a sticker group may contain: its badge shape and its text. */
+const STICKER_PARTS = new Set(['circle', 'rect', 'text']);
 const HEX = /^#[0-9a-f]{6}$/i;
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const index = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.trunc(v)) : 0);
@@ -36,7 +40,15 @@ function sanitizeLook(look: Record<string, unknown>): Look {
     const pattern = sanitizePattern(z.pattern);
     zones[zone] = { variant: index(z.variant), ...(color && { color }), ...(pattern && { pattern }) };
   }
-  return { zones, wheels: index(look.wheels) };
+  const weathering = sanitizeWeathering(look.weathering);
+  return { zones, wheels: index(look.wheels), ...(weathering && { weathering }) };
+}
+
+function validSticker(o: Record<string, unknown>): boolean {
+  const spec = sanitizeSticker(o.stickerSpec);
+  if (!spec || o.kind !== 'sticker' || !Array.isArray(o.objects)) return false;
+  o.stickerSpec = spec;
+  return o.objects.every((part) => isRecord(part) && STICKER_PARTS.has(String(part.type).toLowerCase()) && safePaint(part.fill) && safePaint(part.stroke));
 }
 
 function validAsset(v: unknown): v is AssetSource {
@@ -80,6 +92,7 @@ export function parseDesign(text: string, knownPackagePaths: ReadonlySet<string>
     const type = String(o.type ?? '').toLowerCase();
     if (!OBJECT_TYPES.has(type)) return false;
     if (type === 'image') return typeof o.assetId === 'string' && o.assetId in assets;
+    if (type === 'group') return validSticker(o);
     return safePaint(o.fill) && safePaint(o.stroke);
   });
   for (const o of objects) {

@@ -7,10 +7,13 @@
  */
 import {
   Canvas,
+  Circle,
   Ellipse,
   FabricImage,
   FabricObject,
+  FabricText,
   Gradient,
+  Group,
   IText,
   InteractiveFabricObject,
   Path,
@@ -24,11 +27,20 @@ import {
 } from 'fabric';
 import { TemplateComposer, defaultLook, type CarParts, type Look, type ZoneLook } from '../lib/composition.ts';
 import { DEFAULT_FLAME_COLORS, FLAME_WIDTH, flamePath } from '../lib/flames.ts';
+import { fontWeightFor } from '../lib/fonts.ts';
+import { DEFAULT_STICKERS, checkeredFlagCanvas, type StickerSpec, type StickerStyle } from '../lib/stickers.ts';
+import type { Weathering } from '../lib/weathering.ts';
 import { randomSeed } from '../lib/random.ts';
 import type { PaintZone } from '../lib/templateLayers.ts';
 import { TEXTURE_SIZE, type CarTemplate } from '../lib/templateTypes.ts';
 
-export type LayerKind = 'logo' | 'image' | 'text' | 'shape' | 'flames';
+export type LayerKind = 'logo' | 'image' | 'text' | 'shape' | 'flames' | 'sticker';
+
+/**
+ * Where a layer sits: clipped to the paint (below windows and lights), clipped to the
+ * window glass (above it, e.g. a sun strip), or unclipped at paint level.
+ */
+export type ClipMode = 'paint' | 'windows' | 'none';
 
 export type AssetSource = { kind: 'package'; path: string; name: string } | { kind: 'upload'; dataUrl: string; name: string };
 
@@ -48,7 +60,7 @@ export interface LayerInfo {
   kind: LayerKind;
   visible: boolean;
   locked: boolean;
-  clip: boolean;
+  clip: ClipMode;
 }
 
 /** Editable properties of the selected layer, as shown in the properties panel. */
@@ -57,7 +69,7 @@ export interface LayerProps {
   kind: LayerKind;
   name: string;
   opacity: number;
-  clip: boolean;
+  clip: ClipMode;
   flipX: boolean;
   flipY: boolean;
   angle: number;
@@ -73,9 +85,13 @@ export interface LayerProps {
   tint?: string;
   /** Base, middle and tip colour of a flame layer. */
   flameColors?: string[];
+  sticker?: StickerSpec;
 }
 
-export type LayerPatch = Partial<Omit<LayerProps, 'id' | 'kind' | 'tint'>> & { tint?: string | null };
+export type LayerPatch = Partial<Omit<LayerProps, 'id' | 'kind' | 'tint' | 'sticker'>> & {
+  tint?: string | null;
+  sticker?: Partial<StickerSpec>;
+};
 
 export interface EditorSnapshot {
   carId?: string;
@@ -98,11 +114,13 @@ interface Tags {
   id: string;
   layerName: string;
   kind: LayerKind;
-  clip: boolean;
+  clip: ClipMode;
   assetId?: string;
   /** Flames are regenerated from seed and colours rather than edited point by point. */
   flameSeed?: number;
   flameColors?: string[];
+  /** Stickers are rebuilt from their spec on every change. */
+  stickerSpec?: StickerSpec;
 }
 type Tagged = FabricObject & Partial<Tags>;
 const tagged = (o: FabricObject) => o as Tagged;
@@ -113,7 +131,7 @@ const COMMIT_DELAY_MS = 300;
 const ACCENT = '#f2b632';
 const SHAPE_FILL = '#d9572b';
 
-FabricObject.customProperties = ['id', 'layerName', 'kind', 'clip', 'assetId', 'flameSeed', 'flameColors'];
+FabricObject.customProperties = ['id', 'layerName', 'kind', 'clip', 'assetId', 'flameSeed', 'flameColors', 'stickerSpec'];
 Object.assign(InteractiveFabricObject.ownDefaults, {
   transparentCorners: false,
   cornerStyle: 'circle',
@@ -167,8 +185,11 @@ export class LiveryEditor {
   private guideOpacity = 0.6;
 
   private readonly backgroundImage: FabricImage;
-  private readonly overlayImage: FabricImage;
-  private readonly exportOverlayImage: FabricImage;
+  /** Fixed planes inside the object stack: layers on the paint go below, layers on the windows above. */
+  private readonly weatheringPlane: FabricImage;
+  private readonly overlayPlane: FabricImage;
+  /** UV wireframe drawn above everything while editing, left out of exports. */
+  private readonly guideImage: FabricImage;
 
   private readonly assets = new Map<string, { source: AssetSource; url: string }>();
   private past: string[] = [];
@@ -212,8 +233,10 @@ export class LiveryEditor {
         evented: false,
       });
     this.backgroundImage = plane(this.composer.background);
-    this.overlayImage = plane(this.composer.overlayWithGuide);
-    this.exportOverlayImage = plane(this.composer.overlay);
+    this.weatheringPlane = plane(this.composer.weathering);
+    this.overlayPlane = plane(this.composer.overlay);
+    this.guideImage = plane(this.composer.guide);
+    this.canvas.add(this.weatheringPlane, this.overlayPlane);
 
     this.snapshot = this.buildSnapshot();
     this.bindCanvasEvents();
@@ -267,7 +290,7 @@ export class LiveryEditor {
           kind: o.kind ?? 'shape',
           visible: o.visible,
           locked: !o.selectable,
-          clip: !!o.clip,
+          clip: o.clip ?? 'paint',
         }))
         .reverse(),
       selection: active.map((o) => o.id!).filter(Boolean),
@@ -293,7 +316,7 @@ export class LiveryEditor {
       kind: o.kind ?? 'shape',
       name: this.displayName(o),
       opacity: o.opacity,
-      clip: !!o.clip,
+      clip: o.clip ?? 'paint',
       flipX: o.flipX,
       flipY: o.flipY,
       angle: Math.round(o.angle),
@@ -307,6 +330,7 @@ export class LiveryEditor {
       props.strokeWidth = o.strokeWidth;
     }
     if (o.kind === 'flames') props.flameColors = o.flameColors ?? [...DEFAULT_FLAME_COLORS];
+    if (o.kind === 'sticker' && o.stickerSpec) props.sticker = o.stickerSpec;
     if (o instanceof IText) {
       props.text = o.text;
       props.fontFamily = o.fontFamily;
@@ -329,7 +353,7 @@ export class LiveryEditor {
       this.cancelLook();
       this.composer.render(this.look, this.guideOpacity);
       this.canvas.backgroundImage = this.backgroundImage;
-      this.canvas.overlayImage = this.overlayImage;
+      this.showGuide();
       await this.replaceObjects(design ? await this.objectsFromDesign(design) : []);
       this.past = [];
       this.future = [];
@@ -345,6 +369,12 @@ export class LiveryEditor {
     this.scheduleLook();
   }
 
+  setWeathering(weathering: Weathering): void {
+    if (!this.look) return;
+    this.look = { ...this.look, weathering };
+    this.scheduleLook();
+  }
+
   setWheels(variant: number): void {
     if (!this.look) return;
     this.look = { ...this.look, wheels: variant };
@@ -354,8 +384,13 @@ export class LiveryEditor {
   setGuideOpacity(opacity: number): void {
     this.guideOpacity = opacity;
     this.composer.renderGuide(opacity);
+    this.showGuide();
     this.canvas.requestRenderAll();
     this.emit();
+  }
+
+  private showGuide(): void {
+    this.canvas.overlayImage = this.guideOpacity > 0 && this.template ? this.guideImage : undefined;
   }
 
   /** Paint changes arrive at pointer speed (colour pickers, sliders): recompose once per frame. */
@@ -377,7 +412,7 @@ export class LiveryEditor {
     if (!this.look) return;
     this.composer.render(this.look, this.guideOpacity);
     // The paint mask may have changed shape (some cars have variants with different panels).
-    for (const o of this.userObjects()) if (o.clip) o.set('dirty', true);
+    for (const o of this.userObjects()) if (o.clip !== 'none') o.set('dirty', true);
     this.canvas.requestRenderAll();
     this.changed();
   }
@@ -396,26 +431,27 @@ export class LiveryEditor {
     return this.canvas.width / this.canvas.getZoom();
   }
 
-  private place(o: Tagged, kind: LayerKind, name: string): void {
+  private place(o: Tagged, kind: LayerKind, name: string, clip: ClipMode = 'paint'): void {
     const center = this.canvas.getVpCenter();
     Object.assign(o, {
       id: crypto.randomUUID(),
       layerName: name && this.nextName(name),
       kind,
-      clip: true,
+      clip,
     } satisfies Tags);
     o.set({ left: center.x, top: center.y });
     this.applyClip(o);
     this.canvas.add(o);
+    this.normalizeStack();
     this.canvas.setActiveObject(o);
     this.canvas.requestRenderAll();
   }
 
-  async addImage(blob: Blob, source: AssetSource, kind: 'logo' | 'image'): Promise<void> {
+  async addImage(blob: Blob, source: AssetSource, kind: 'logo' | 'image', width = kind === 'logo' ? 520 : 900): Promise<void> {
     const assetId = this.registerAsset(source, blob);
     const image = (await FabricImage.fromURL(this.assets.get(assetId)!.url)) as Tagged & FabricImage;
     image.assetId = assetId;
-    const target = Math.min(kind === 'logo' ? 520 : 900, this.visibleWidth() * 0.4);
+    const target = Math.min(width, this.visibleWidth() * 0.4);
     image.scale(target / image.width);
     this.place(image, kind, source.name);
   }
@@ -448,6 +484,12 @@ export class LiveryEditor {
     if (active.length !== 1 || active[0].kind !== 'flames') return;
     const old = active[0];
     const fresh = this.createFlames(randomSeed(), old.flameColors ?? DEFAULT_FLAME_COLORS);
+    fresh.set({ stroke: old.stroke, strokeWidth: old.strokeWidth });
+    this.swap(old, fresh);
+  }
+
+  /** Replaces a layer with a rebuilt version in the same place, as a single change. */
+  private swap(old: Tagged, fresh: Tagged): void {
     fresh.set({
       left: old.left,
       top: old.top,
@@ -457,8 +499,7 @@ export class LiveryEditor {
       flipX: old.flipX,
       flipY: old.flipY,
       opacity: old.opacity,
-      stroke: old.stroke,
-      strokeWidth: old.strokeWidth,
+      visible: old.visible,
     });
     Object.assign(fresh, { id: old.id, layerName: old.layerName, kind: old.kind, clip: old.clip });
     this.applyClip(fresh);
@@ -468,12 +509,57 @@ export class LiveryEditor {
     try {
       this.canvas.remove(old);
       this.canvas.insertAt(index, fresh);
+      this.normalizeStack();
     } finally {
       this.restoring = false;
     }
     this.canvas.setActiveObject(fresh);
     this.canvas.requestRenderAll();
     this.changed();
+  }
+
+  addSticker(style: StickerStyle): void {
+    const sticker = this.createSticker(DEFAULT_STICKERS[style]);
+    const target = style === 'banner' ? Math.min(1100, this.visibleWidth() * 0.55) : Math.min(260, this.visibleWidth() * 0.2);
+    sticker.scale(target / sticker.width);
+    const names: Record<StickerStyle, string> = { circle: 'Startnummer', plate: 'Startnummer', banner: 'Sonnenblende' };
+    this.place(sticker, 'sticker', names[style], style === 'banner' ? 'windows' : 'paint');
+  }
+
+  /** A checkered flag image; saved with the design like an uploaded picture. */
+  async addCheckeredFlag(): Promise<void> {
+    const canvas = checkeredFlagCanvas();
+    const blob = await new Promise<Blob>((resolve, reject) =>
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Zielflagge konnte nicht erzeugt werden.'))), 'image/png'),
+    );
+    await this.addImage(blob, { kind: 'upload', dataUrl: canvas.toDataURL('image/png'), name: 'Zielflagge' }, 'image', 360);
+  }
+
+  private createSticker(spec: StickerSpec): Tagged & Group {
+    const banner = spec.style === 'banner';
+    const text = new FabricText(spec.text || ' ', {
+      fontFamily: spec.fontFamily,
+      fontWeight: fontWeightFor(spec.fontFamily),
+      fontSize: banner ? 110 : 150,
+      charSpacing: banner ? 120 : 0,
+      fill: spec.color,
+      // Digits and capitals have no descenders: nudge them down to look centred.
+      top: banner ? 5 : 9,
+    });
+    const common = { fill: spec.background, stroke: spec.outline, strokeWidth: spec.outlineWidth };
+    let shape: FabricObject;
+    if (banner) {
+      shape = new Rect({ ...common, width: Math.max(900, text.width + 220), height: 160 });
+    } else {
+      // Fit longer numbers into the badge instead of letting them spill over.
+      const room = spec.style === 'circle' ? 180 : 196;
+      text.scale(Math.min(1, room / text.width, 170 / text.height));
+      shape =
+        spec.style === 'circle' ? new Circle({ ...common, radius: 120 }) : new Rect({ ...common, width: 250, height: 250, rx: 28, ry: 28 });
+    }
+    const sticker = new Group([shape, text]) as Tagged & Group;
+    sticker.stickerSpec = { ...spec };
+    return sticker;
   }
 
   private flameGradient(colors: readonly string[]): Gradient<'linear'> {
@@ -557,21 +643,42 @@ export class LiveryEditor {
       copy.set({ left: copy.left + 24, top: copy.top + 24 });
       const index = this.canvas.getObjects().indexOf(active[0]);
       this.canvas.insertAt(index + 1, copy);
+      this.normalizeStack();
       this.canvas.setActiveObject(copy);
       this.canvas.requestRenderAll();
     });
   }
 
-  /** Moves a layer to a position in the panel order (0 = top-most). */
+  /**
+   * Moves a layer to a position in the panel order (0 = top-most). Layers stay in their
+   * band: whatever is on the windows is always above the windows, the rest below.
+   */
   moveLayer(id: string, panelIndex: number): void {
-    const o = this.find(id);
-    if (!o) return;
-    const objects = this.userObjects();
-    const offset = this.canvas.getObjects().indexOf(objects[0]);
-    const target = clamp(objects.length - 1 - panelIndex, 0, objects.length - 1);
-    this.canvas.moveObjectTo(o, offset + target);
+    const topFirst = this.userObjects().reverse();
+    const from = topFirst.findIndex((o) => o.id === id);
+    if (from === -1) return;
+    const [o] = topFirst.splice(from, 1);
+    topFirst.splice(clamp(panelIndex, 0, topFirst.length), 0, o);
+    this.applyOrder(topFirst.reverse());
     this.canvas.requestRenderAll();
     this.changed();
+  }
+
+  /** Restores the stack invariant: paint layers, weathering, windows and lights, window layers. */
+  private normalizeStack(): void {
+    this.applyOrder(this.userObjects());
+  }
+
+  private applyOrder(bottomFirst: Tagged[]): void {
+    const desired = [
+      ...bottomFirst.filter((o) => o.clip !== 'windows'),
+      this.weatheringPlane,
+      this.overlayPlane,
+      ...bottomFirst.filter((o) => o.clip === 'windows'),
+    ];
+    desired.forEach((o, index) => {
+      if (this.canvas.getObjects()[index] !== o) this.canvas.moveObjectTo(o, index);
+    });
   }
 
   setVisible(id: string, visible: boolean): void {
@@ -604,11 +711,17 @@ export class LiveryEditor {
     const active = this.canvas.getActiveObjects() as Tagged[];
     if (active.length !== 1) return;
     const o = active[0];
-    const { name, clip, tint, flameColors, ...rest } = patch;
+    const { name, clip, tint, flameColors, sticker, ...rest } = patch;
+    if (sticker && o.kind === 'sticker' && o.stickerSpec) {
+      // Rebuilt as a whole: the badge size depends on text and font.
+      this.swap(o, this.createSticker({ ...o.stickerSpec, ...sticker }));
+      return;
+    }
     if (name !== undefined) o.layerName = name;
     if (clip !== undefined) {
       o.clip = clip;
       this.applyClip(o);
+      this.normalizeStack();
     }
     if (flameColors && o.kind === 'flames') {
       o.flameColors = [...flameColors];
@@ -633,8 +746,9 @@ export class LiveryEditor {
   }
 
   private applyClip(o: Tagged): void {
-    o.clipPath = o.clip
-      ? new FabricImage(this.composer.paintMask, {
+    const mask = o.clip === 'windows' ? this.composer.windowsMask : o.clip === 'none' ? undefined : this.composer.paintMask;
+    o.clipPath = mask
+      ? new FabricImage(mask, {
           left: TEXTURE_SIZE / 2,
           top: TEXTURE_SIZE / 2,
           absolutePositioned: true,
@@ -661,6 +775,9 @@ export class LiveryEditor {
   private restoreObjects(data: Record<string, unknown>[]): Promise<Tagged[]> {
     return util.enlivenObjects<FabricObject>(structuredClone(data)).then((objects) => {
       for (const o of objects as Tagged[]) {
+        // Designs saved before the windows band stored the clip as a boolean.
+        const clip = o.clip as ClipMode | boolean | undefined;
+        if (clip !== 'paint' && clip !== 'windows' && clip !== 'none') o.clip = clip === false ? 'none' : 'paint';
         this.applyClip(o);
         if (!o.selectable) o.set({ evented: false });
       }
@@ -674,6 +791,7 @@ export class LiveryEditor {
       this.canvas.discardActiveObject();
       this.canvas.remove(...this.userObjects());
       if (objects.length) this.canvas.add(...objects);
+      this.normalizeStack();
       this.canvas.requestRenderAll();
     } finally {
       this.restoring = false;
@@ -794,12 +912,12 @@ export class LiveryEditor {
     }
     const { canvas } = this;
     const vpt = [...canvas.viewportTransform] as TMat2D;
-    canvas.overlayImage = this.exportOverlayImage;
+    canvas.overlayImage = undefined;
     canvas.viewportTransform = [1, 0, 0, 1, 0, 0];
     try {
       return canvas.toCanvasElement(1, { left: 0, top: 0, width: TEXTURE_SIZE, height: TEXTURE_SIZE });
     } finally {
-      canvas.overlayImage = this.overlayImage;
+      this.showGuide();
       canvas.setViewportTransform(vpt);
     }
   }

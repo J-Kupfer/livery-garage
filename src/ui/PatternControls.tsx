@@ -1,10 +1,18 @@
 import { Dices } from 'lucide-react';
-import { PATTERN_KINDS, PATTERN_PALETTES, PATTERN_SCALE_MAX, PATTERN_SCALE_MIN, patternThumbnail, randomSeed, type PatternSpec } from '../lib/patterns.ts';
+import {
+  PATTERN_KINDS,
+  PATTERN_PALETTES,
+  PATTERN_SCALE_MAX,
+  PATTERN_SCALE_MIN,
+  isPalette,
+  patternThumbnail,
+  randomSeed,
+  withKind,
+  type PatternSpec,
+} from '../lib/patterns.ts';
 import { SliderField } from './controls.tsx';
 
 const COLOR_LABELS = ['Grundfarbe', 'Farbe 2', 'Farbe 3', 'Farbe 4'];
-
-const sameColors = (a: readonly string[], b: readonly string[]) => a.length === b.length && a.every((c, i) => c.toLowerCase() === b[i].toLowerCase());
 
 interface Props {
   spec: PatternSpec;
@@ -12,6 +20,7 @@ interface Props {
 }
 
 export function PatternControls({ spec, onChange }: Props) {
+  const colorCount = PATTERN_KINDS.find((k) => k.kind === spec.kind)?.colors ?? 4;
   return (
     <div className="pattern-box">
       <div className="pattern-kinds" role="radiogroup" aria-label="Muster">
@@ -22,9 +31,9 @@ export function PatternControls({ spec, onChange }: Props) {
             role="radio"
             aria-checked={spec.kind === kind}
             className="pattern-kind"
-            onClick={() => onChange({ ...spec, kind })}
+            onClick={() => onChange(withKind(spec, kind))}
           >
-            <img src={patternThumbnail({ ...spec, kind })} alt="" />
+            <img src={patternThumbnail(withKind(spec, kind))} alt="" />
             {label}
           </button>
         ))}
@@ -40,7 +49,7 @@ export function PatternControls({ spec, onChange }: Props) {
               className="palette"
               title={palette.name}
               aria-label={`Farbvorlage ${palette.name}`}
-              aria-pressed={sameColors(palette.colors, spec.colors)}
+              aria-pressed={isPalette(spec.colors, palette)}
               onClick={() => onChange({ ...spec, colors: [...palette.colors] })}
             >
               {palette.colors.map((color) => (
@@ -54,7 +63,7 @@ export function PatternControls({ spec, onChange }: Props) {
       <div>
         <h4 className="group-title">Farben</h4>
         <div className="pattern-colors">
-          {spec.colors.map((color, i) => (
+          {spec.colors.slice(0, colorCount).map((color, i) => (
             <label key={i} className="swatch" style={{ background: color }} title={`${COLOR_LABELS[i]} (${color})`}>
               <input
                 type="color"

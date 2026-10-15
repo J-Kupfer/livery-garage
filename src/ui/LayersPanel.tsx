@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
-import { Circle, Eye, EyeOff, Flame, Image, Lock, LockOpen, RectangleHorizontal, Shapes, Sticker, Type, Upload } from 'lucide-react';
+import { Fragment, useEffect, useRef, useState } from 'react';
+import { Circle, Eye, EyeOff, Flag, Flame, Hash, Image, Lock, LockOpen, PanelTop, RectangleHorizontal, Shapes, Square, Sticker, Type, Upload } from 'lucide-react';
 import type { LayerInfo, LayerKind, LiveryEditor } from '../editor/LiveryEditor.ts';
 import { DEFAULT_DECAL_FONT } from '../lib/fonts.ts';
 
-const KIND_ICON: Record<LayerKind, typeof Type> = { logo: Sticker, image: Image, text: Type, shape: Shapes, flames: Flame };
+const KIND_ICON: Record<LayerKind, typeof Type> = { logo: Sticker, image: Image, text: Type, shape: Shapes, flames: Flame, sticker: Hash };
 
 interface Props {
   editor: LiveryEditor;
@@ -16,24 +16,24 @@ interface Props {
 
 export function LayersPanel({ editor, layers, selection, disabled, onPickLogo, onUpload }: Props) {
   const upload = useRef<HTMLInputElement>(null);
-  const [shapesOpen, setShapesOpen] = useState(false);
+  const [menu, setMenu] = useState<'shapes' | 'stickers'>();
   const [renaming, setRenaming] = useState<string>();
   const [drag, setDrag] = useState<{ id: string; over?: number }>();
-  const shapesRef = useRef<HTMLDivElement>(null);
+  const barRef = useRef<HTMLDivElement>(null);
+  const hasWindowLayers = layers.some((l) => l.clip === 'windows');
 
   useEffect(() => {
-    if (!shapesOpen) return;
+    if (!menu) return;
     const close = (e: PointerEvent) => {
-      if (!shapesRef.current?.contains(e.target as Node)) setShapesOpen(false);
+      if (!barRef.current?.contains(e.target as Node)) setMenu(undefined);
     };
     document.addEventListener('pointerdown', close);
     return () => document.removeEventListener('pointerdown', close);
-  }, [shapesOpen]);
+  }, [menu]);
 
-  const addShape = (shape: 'stripe' | 'rect' | 'circle' | 'flames') => {
-    if (shape === 'flames') editor.addFlames();
-    else editor.addShape(shape);
-    setShapesOpen(false);
+  const pick = (add: () => void) => {
+    add();
+    setMenu(undefined);
   };
 
   /** Drop slot `slot` means "before the row with that index" (layers.length = after the last). */
@@ -47,7 +47,7 @@ export function LayersPanel({ editor, layers, selection, disabled, onPickLogo, o
 
   return (
     <section className="panel-section layers" aria-label="Ebenen">
-      <div className="add-bar" role="toolbar" aria-label="Ebene hinzufügen">
+      <div className="add-bar" role="toolbar" aria-label="Ebene hinzufügen" ref={barRef}>
         <button type="button" className="add-btn" onClick={onPickLogo} disabled={disabled}>
           <Sticker size={18} aria-hidden />
           Logo
@@ -56,31 +56,60 @@ export function LayersPanel({ editor, layers, selection, disabled, onPickLogo, o
           <Type size={18} aria-hidden />
           Text
         </button>
-        <div className="menu-anchor" ref={shapesRef}>
+        <div className="menu-anchor">
           <button
             type="button"
             className="add-btn"
             aria-haspopup="menu"
-            aria-expanded={shapesOpen}
-            onClick={() => setShapesOpen((o) => !o)}
+            aria-expanded={menu === 'shapes'}
+            onClick={() => setMenu((m) => (m === 'shapes' ? undefined : 'shapes'))}
             disabled={disabled}
           >
             <Shapes size={18} aria-hidden />
             Form
           </button>
-          {shapesOpen && (
+          {menu === 'shapes' && (
             <div className="menu" role="menu">
-              <button type="button" role="menuitem" onClick={() => addShape('stripe')}>
+              <button type="button" role="menuitem" onClick={() => pick(() => editor.addShape('stripe'))}>
                 <RectangleHorizontal size={16} aria-hidden /> Streifen
               </button>
-              <button type="button" role="menuitem" onClick={() => addShape('rect')}>
+              <button type="button" role="menuitem" onClick={() => pick(() => editor.addShape('rect'))}>
                 <RectangleHorizontal size={16} aria-hidden /> Rechteck
               </button>
-              <button type="button" role="menuitem" onClick={() => addShape('circle')}>
+              <button type="button" role="menuitem" onClick={() => pick(() => editor.addShape('circle'))}>
                 <Circle size={16} aria-hidden /> Kreis
               </button>
-              <button type="button" role="menuitem" onClick={() => addShape('flames')}>
+              <button type="button" role="menuitem" onClick={() => pick(() => editor.addFlames())}>
                 <Flame size={16} aria-hidden /> Flammen
+              </button>
+            </div>
+          )}
+        </div>
+        <div className="menu-anchor">
+          <button
+            type="button"
+            className="add-btn"
+            aria-haspopup="menu"
+            aria-expanded={menu === 'stickers'}
+            onClick={() => setMenu((m) => (m === 'stickers' ? undefined : 'stickers'))}
+            disabled={disabled}
+          >
+            <Hash size={18} aria-hidden />
+            Sticker
+          </button>
+          {menu === 'stickers' && (
+            <div className="menu" role="menu">
+              <button type="button" role="menuitem" onClick={() => pick(() => editor.addSticker('circle'))}>
+                <Circle size={16} aria-hidden /> Startnummer rund
+              </button>
+              <button type="button" role="menuitem" onClick={() => pick(() => editor.addSticker('plate'))}>
+                <Square size={16} aria-hidden /> Startnummer Schild
+              </button>
+              <button type="button" role="menuitem" onClick={() => pick(() => editor.addSticker('banner'))}>
+                <PanelTop size={16} aria-hidden /> Sonnenblende
+              </button>
+              <button type="button" role="menuitem" onClick={() => pick(() => void editor.addCheckeredFlag())}>
+                <Flag size={16} aria-hidden /> Zielflagge
               </button>
             </div>
           )}
@@ -112,9 +141,16 @@ export function LayersPanel({ editor, layers, selection, disabled, onPickLogo, o
           {layers.map((layer, index) => {
             const Icon = KIND_ICON[layer.kind];
             const selected = selection.includes(layer.id);
+            // Window layers always sit above the glass, so they form their own group at the top.
+            const groupStart = hasWindowLayers && (index === 0 || (layer.clip !== 'windows' && layers[index - 1].clip === 'windows'));
             return (
+              <Fragment key={layer.id}>
+                {groupStart && (
+                  <li className="layer-group" aria-hidden>
+                    {layer.clip === 'windows' ? 'Auf den Scheiben' : 'Auf dem Lack'}
+                  </li>
+                )}
               <li
-                key={layer.id}
                 className={[
                   'layer-row',
                   selected && 'is-selected',
@@ -185,6 +221,7 @@ export function LayersPanel({ editor, layers, selection, disabled, onPickLogo, o
                   {layer.locked ? <Lock size={14} /> : <LockOpen size={14} />}
                 </button>
               </li>
+              </Fragment>
             );
           })}
         </ol>

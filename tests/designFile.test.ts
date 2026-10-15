@@ -108,4 +108,28 @@ describe('parseDesign', () => {
     );
     expect(parsed.design.objects.map((o) => o.id)).toEqual(['flames']);
   });
+
+  it('accepts sticker groups and rejects groups that are not stickers', () => {
+    const badge = [{ type: 'Circle', fill: '#ffffff', stroke: '#000000' }, { type: 'Text', text: '7', fill: '#000000' }];
+    const spec = { style: 'circle', text: '7', fontFamily: 'Archivo Black', background: '#ffffff', color: '#000000', outline: '#000000', outlineWidth: 10 };
+    const parsed = parseDesign(
+      JSON.stringify(
+        design({
+          objects: [
+            { type: 'Group', kind: 'sticker', stickerSpec: spec, objects: badge, id: 'sticker' },
+            { type: 'Group', kind: 'sticker', objects: badge, id: 'no-spec' },
+            { type: 'Group', kind: 'sticker', stickerSpec: spec, objects: [{ type: 'Image', src: 'https://example.com/a.png' }], id: 'image-inside' },
+            { type: 'Group', stickerSpec: spec, objects: badge, id: 'not-a-sticker' },
+          ],
+        }),
+      ),
+      known,
+    );
+    expect(parsed.design.objects.map((o) => o.id)).toEqual(['sticker']);
+  });
+
+  it('keeps weathering, clamped', () => {
+    const parsed = parseDesign(JSON.stringify(design({ look: { zones: {}, wheels: 0, weathering: { rust: 3, scratches: 0.4, seed: 77 } } })), known);
+    expect(parsed.design.look.weathering).toEqual({ rust: 1, scratches: 0.4, seed: 77 });
+  });
 });

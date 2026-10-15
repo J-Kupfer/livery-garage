@@ -1,7 +1,8 @@
 import { useRef } from 'react';
-import { Pipette } from 'lucide-react';
+import { Dices, Pipette } from 'lucide-react';
 import type { CarParts, Look, ZoneLook } from '../lib/composition.ts';
-import { PATTERN_PALETTES, defaultPattern, patternThumbnail, type PatternSpec } from '../lib/patterns.ts';
+import { PATTERN_PALETTES, defaultPattern, patternThumbnail, randomSeed, type PatternSpec } from '../lib/patterns.ts';
+import type { Weathering } from '../lib/weathering.ts';
 import type { PaintZone } from '../lib/templateLayers.ts';
 import { SliderField } from './controls.tsx';
 import { PatternControls } from './PatternControls.tsx';
@@ -17,10 +18,13 @@ interface Props {
   guideOpacity: number;
   onZone: (zone: PaintZone, look: ZoneLook) => void;
   onWheels: (variant: number) => void;
+  onWeathering: (weathering: Weathering) => void;
   onGuide: (opacity: number) => void;
 }
 
-export function PaintPanel({ parts, look, guideOpacity, onZone, onWheels, onGuide }: Props) {
+const NO_WEATHERING: Weathering = { rust: 0, scratches: 0, seed: 1 };
+
+export function PaintPanel({ parts, look, guideOpacity, onZone, onWheels, onWeathering, onGuide }: Props) {
   // Switching a zone back to a pattern restores the last one instead of rolling a new one.
   const lastPattern = useRef<Partial<Record<PaintZone, PatternSpec>>>({});
   if (!parts || !look) return <aside className="panel panel-left" />;
@@ -107,6 +111,35 @@ export function PaintPanel({ parts, look, guideOpacity, onZone, onWheels, onGuid
             </div>
           </div>
         )}
+      </section>
+
+      <section className="panel-section">
+        <h2 className="section-title">Gebrauchsspuren</h2>
+        <p className="section-hint">Dreck und Staub macht das Spiel selbst.</p>
+        <SliderField
+          label="Rost"
+          value={(look.weathering ?? NO_WEATHERING).rust * 100}
+          min={0}
+          max={100}
+          unit=" %"
+          onChange={(v) => onWeathering({ ...(look.weathering ?? NO_WEATHERING), rust: v / 100 })}
+        />
+        <SliderField
+          label="Kratzer"
+          value={(look.weathering ?? NO_WEATHERING).scratches * 100}
+          min={0}
+          max={100}
+          unit=" %"
+          onChange={(v) => onWeathering({ ...(look.weathering ?? NO_WEATHERING), scratches: v / 100 })}
+        />
+        <button
+          type="button"
+          className="btn btn-quiet btn-wide"
+          disabled={!look.weathering || (look.weathering.rust === 0 && look.weathering.scratches === 0)}
+          onClick={() => onWeathering({ ...(look.weathering ?? NO_WEATHERING), seed: randomSeed() })}
+        >
+          <Dices size={16} aria-hidden /> Neu würfeln
+        </button>
       </section>
 
       {parts.uv && (
