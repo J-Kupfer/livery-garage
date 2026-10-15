@@ -1,0 +1,11 @@
+# Official template package: licensed by Funselektor, must never be committed or redistributed
+*.zip
+*.psd
+template-cache/
+
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+.vite/
