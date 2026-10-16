@@ -1,12 +1,12 @@
 /**
- * A pinstripe layer: a Fabric path rebuilt from its line spec, with the outline drawn
- * as a wider stroke underneath the line, and one drag handle per point instead of the
- * usual scale and rotate handles.
+ * A pinstripe layer: an open path through its points, with the outline drawn as a
+ * wider stroke underneath the line.
  */
-import { Control, Path, Point, classRegistry, util, type PathProps } from 'fabric';
+import { classRegistry, type PathProps } from 'fabric';
 import { lineDashArray, linePath, type LinePoint, type LineSpec } from '../lib/lines.ts';
+import { PointPath, pointControls } from './PointPath.ts';
 
-export class Pinstripe extends Path {
+export class Pinstripe extends PointPath {
   static type = 'Pinstripe';
 
   declare lineSpec: LineSpec;
@@ -14,14 +14,7 @@ export class Pinstripe extends Path {
   constructor(spec: LineSpec, options: Partial<PathProps> = {}) {
     super(linePath(spec.points, spec.smooth), options);
     this.lineSpec = spec;
-    this.set({
-      fill: '',
-      strokeLineCap: 'round',
-      strokeLineJoin: 'round',
-      // Only the line itself is a click target, not the empty space inside its bounding box.
-      perPixelTargetFind: true,
-      hasBorders: false,
-    });
+    this.set({ fill: '', strokeLineCap: 'round' });
     this.applyStyle();
     this.controls = pointControls(spec.points.length);
   }
@@ -31,42 +24,29 @@ export class Pinstripe extends Path {
     return this._fromObject<Pinstripe>(object, { extraParam: 'lineSpec' });
   }
 
+  get points(): LinePoint[] {
+    return this.lineSpec.points;
+  }
+
+  setPoints(points: LinePoint[]): void {
+    this.setSpec({ points });
+  }
+
   /** Changes points or style. Points that do not move keep their place on the canvas. */
   setSpec(patch: Partial<LineSpec>): void {
     const before = this.lineSpec;
     this.lineSpec = { ...before, ...patch };
-    if (patch.points || this.lineSpec.smooth !== before.smooth) this.rebuildPath();
-    if (this.lineSpec.points.length !== before.points.length) this.controls = pointControls(this.lineSpec.points.length);
+    const { points, smooth } = this.lineSpec;
+    if (patch.points || smooth !== before.smooth) this.rebuild(linePath(points, smooth), points.length);
     this.applyStyle();
     this.set('dirty', true);
     this.setCoords();
-  }
-
-  /** Where a point currently is on the canvas. */
-  canvasPoint(index: number): Point {
-    const [x, y] = this.lineSpec.points[index];
-    return new Point(x, y).subtract(this.pathOffset).transform(this.calcTransformMatrix());
-  }
-
-  /** Moves one point to a canvas position. */
-  movePoint(index: number, to: Point): void {
-    const local = util.sendPointToPlane(to, undefined, this.calcOwnMatrix()).add(this.pathOffset);
-    this.setSpec({ points: this.lineSpec.points.map((p, i): LinePoint => (i === index ? [local.x, local.y] : p)) });
   }
 
   private applyStyle(): void {
     const { color, width, outlineWidth } = this.lineSpec;
     // The stroke width covers the outline, so bounding box and cache include all of it.
     this.set({ stroke: color, strokeWidth: width + 2 * outlineWidth, strokeDashArray: lineDashArray(this.lineSpec) });
-  }
-
-  private rebuildPath(): void {
-    // The old path centre must stay where it is; everything else follows from it.
-    const anchor = new Point(this.pathOffset);
-    const center = this.getRelativeCenterPoint();
-    this._setPath(linePath(this.lineSpec.points, this.lineSpec.smooth), false);
-    const moved = anchor.subtract(this.pathOffset).transform(this.calcOwnMatrix());
-    this.setPositionByOrigin(center.scalarMultiply(2).subtract(moved), 'center', 'center');
   }
 
   _renderStroke(ctx: CanvasRenderingContext2D): void {
@@ -90,19 +70,3 @@ export class Pinstripe extends Path {
 }
 
 classRegistry.setClass(Pinstripe);
-
-function pointControls(count: number): Record<string, Control> {
-  const controls: Record<string, Control> = {};
-  for (let i = 0; i < count; i++) {
-    controls[`p${i}`] = new Control({
-      actionName: 'modifyLine',
-      cursorStyle: 'move',
-      positionHandler: (_dim, _matrix, object) => (object as Pinstripe).canvasPoint(i).transform(object.getViewportTransform()),
-      actionHandler: (_e, transform, x, y) => {
-        (transform.target as Pinstripe).movePoint(i, new Point(x, y));
-        return true;
-      },
-    });
-  }
-  return controls;
-}

@@ -183,6 +183,113 @@ describe('parseDesign', () => {
     expect(parsed.design.objects.map((o) => o.id)).toEqual(['ok']);
   });
 
+  it('accepts free areas, rebuilt from their points', () => {
+    const areaSpec = { points: [[0, 0], [100, 0], [50, 80]], smooth: true };
+    const parsed = parseDesign(
+      JSON.stringify(
+        design({
+          objects: [
+            { type: 'Area', kind: 'area', areaSpec, path: [['M', 0, 0]], fill: '#d9572b', id: 'area' },
+            { type: 'Area', kind: 'area', areaSpec: { points: [[0, 0], [1, 1]] }, id: 'two-points' },
+            { type: 'Area', kind: 'shape', areaSpec, id: 'wrong-kind' },
+          ],
+        }),
+      ),
+      known,
+    );
+    expect(parsed.design.objects.map((o) => o.id)).toEqual(['area']);
+    expect(parsed.design.objects[0]).not.toHaveProperty('path');
+  });
+
+  it('keeps valid fills and drops broken ones', () => {
+    const gradient = { kind: 'gradient', from: '#ffffff', to: '#000000', angle: 45, fade: false };
+    const parsed = parseDesign(
+      JSON.stringify(
+        design({
+          objects: [
+            { type: 'Rect', fill: '#ff0000', fillSpec: gradient, id: 'gradient' },
+            { type: 'Rect', fill: '#ff0000', fillSpec: { kind: 'pattern', pattern: { kind: 'nope' } }, id: 'broken' },
+          ],
+        }),
+      ),
+      known,
+    );
+    expect(parsed.design.objects[0].fillSpec).toEqual(gradient);
+    expect(parsed.design.objects[1]).not.toHaveProperty('fillSpec');
+  });
+
+  it('only keeps the editor’s own image filters', () => {
+    const parsed = parseDesign(
+      JSON.stringify(
+        design({
+          objects: [
+            {
+              type: 'Image',
+              assetId: 'logo',
+              id: 'logo',
+              filters: [{ type: 'WhiteToAlpha' }, { type: 'BlendColor', color: '#2ec5ff', mode: 'tint', alpha: 1 }, { type: 'Convolute', matrix: [1] }],
+            },
+            { type: 'Image', assetId: 'logo', id: 'not-a-list', filters: 'WhiteToAlpha' },
+          ],
+        }),
+      ),
+      known,
+    );
+    expect(parsed.design.objects.map((o) => o.id)).toEqual(['logo']);
+    expect((parsed.design.objects[0].filters as { type: string }[]).map((f) => f.type)).toEqual(['WhiteToAlpha', 'BlendColor']);
+  });
+
+  it('rebuilds bent text from its bend', () => {
+    const parsed = parseDesign(
+      JSON.stringify(design({ objects: [{ type: 'IText', text: 'CREW', textArc: 250, path: { type: 'Path', path: [['M', 0, 0]] }, id: 't' }] })),
+      known,
+    );
+    expect(parsed.design.objects[0].textArc).toBe(100);
+    expect(parsed.design.objects[0]).not.toHaveProperty('path');
+  });
+
+  it('checks every layer inside a group like a layer of its own', () => {
+    const rect = { type: 'Rect', fill: '#ff0000', id: 'inner' };
+    const remote = { type: 'Image', assetId: 'nowhere', id: 'remote' };
+    const nested = (depth: number): Record<string, unknown> =>
+      depth === 0 ? rect : { type: 'Group', kind: 'group', objects: [nested(depth - 1)], id: `g${depth}` };
+    const parsed = parseDesign(
+      JSON.stringify(
+        design({
+          objects: [
+            { type: 'Group', kind: 'group', objects: [rect, remote, { type: 'Image', assetId: 'logo', src: 'blob:x', id: 'logo' }], id: 'group' },
+            { type: 'Group', kind: 'group', objects: [remote], id: 'empty' },
+            nested(5),
+          ],
+        }),
+      ),
+      known,
+    );
+    expect(parsed.design.objects.map((o) => o.id)).toEqual(['group']);
+    const members = parsed.design.objects[0].objects as Record<string, unknown>[];
+    expect(members.map((o) => o.id)).toEqual(['inner', 'logo']);
+    expect(members[1]).not.toHaveProperty('src');
+  });
+
+  it('keeps zone gradients', () => {
+    const parsed = parseDesign(
+      JSON.stringify(
+        design({
+          look: {
+            zones: {
+              body: { variant: 0, gradient: { from: '#151515', to: '#DCB35E', direction: 'height' } },
+              roof: { variant: 0, gradient: { from: '#151515', to: 'blue' } },
+            },
+            wheels: 0,
+          },
+        }),
+      ),
+      known,
+    );
+    expect(parsed.design.look.zones.body).toEqual({ variant: 0, gradient: { from: '#151515', to: '#dcb35e', direction: 'height' } });
+    expect(parsed.design.look.zones.roof).toEqual({ variant: 0 });
+  });
+
   it('keeps weathering, clamped', () => {
     const parsed = parseDesign(JSON.stringify(design({ look: { zones: {}, wheels: 0, weathering: { rust: 3, scratches: 0.4, seed: 77 } } })), known);
     expect(parsed.design.look.weathering).toEqual({ rust: 1, scratches: 0.4, seed: 77 });

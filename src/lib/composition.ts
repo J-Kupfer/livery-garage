@@ -10,26 +10,40 @@
  *   guide       the UV wireframe, only while editing
  *
  * Paint layers in the templates are flat colours (verified for all 21 cars), so a
- * custom colour is the layer's alpha filled with that colour, and a pattern is the
- * layer's alpha filled with the pattern.
+ * custom colour is the layer's alpha filled with that colour, and a pattern or a
+ * gradient is the layer's alpha filled with the pattern or gradient.
  */
 import { patternCanvas, type PatternSpec } from './patterns.ts';
+import { findMirrorAxis } from './symmetry.ts';
 import { hasWeathering, paintWeathering, type Weathering } from './weathering.ts';
 import type { PaintZone } from './templateLayers.ts';
 import { TEXTURE_SIZE, type CarTemplate, type TemplateLayer } from './templateTypes.ts';
 
 export const ZONE_ORDER: readonly PaintZone[] = ['body', 'second', 'roof'];
 
+/**
+ * A two-colour gradient over the car: `length` runs from one end of the car to the
+ * other, `height` from the sills (`from`) up to the middle of the roof (`to`), on both
+ * mirrored sides at once.
+ */
+export interface ZoneGradient {
+  from: string;
+  to: string;
+  direction: 'length' | 'height';
+}
+
 export interface ZoneLook {
-  /** Index into the zone's variants: decides the shape and, without `color` or `pattern`, the colour. */
+  /** Index into the zone's variants: decides the shape and, without `color`, `pattern` or `gradient`, the colour. */
   variant: number;
   /** Custom #rrggbb colour painted into the variant's shape. */
   color?: string;
-  /** Pattern painted into the variant's shape; wins over `color`. */
+  /** Pattern painted into the variant's shape; wins over `gradient` and `color`. */
   pattern?: PatternSpec;
+  /** Gradient painted into the variant's shape; wins over `color`. */
+  gradient?: ZoneGradient;
 }
 
-type Paint = { color?: string; pattern?: PatternSpec };
+type Paint = { color?: string; pattern?: PatternSpec; gradient?: ZoneGradient };
 
 export interface Look {
   zones: Partial<Record<PaintZone, ZoneLook>>;
@@ -93,6 +107,9 @@ export class TemplateComposer {
   private weatheringKey = '';
   private template?: CarTemplate;
   private parts?: CarParts;
+  /** Texture y of the centre line between the car's two mirrored sides, found once per template. */
+  mirrorAxis?: number;
+  private axisTemplate?: CarTemplate;
 
   setTemplate(template: CarTemplate): CarParts {
     this.template = template;
@@ -110,19 +127,25 @@ export class TemplateComposer {
     for (const ctx of [bg, over, mask, glass]) ctx.clearRect(0, 0, TEXTURE_SIZE, TEXTURE_SIZE);
 
     const top = template.layers.findLastIndex((l) => l.cls.role === 'paint');
+    const selected = template.layers.map((layer) => this.selection(layer, look, parts));
+    // Masks first: the mirror axis comes from the paint mask, and height gradients need it.
     template.layers.forEach((layer, index) => {
-      const selection = this.selection(layer, look, parts);
-      if (!selection.selected) return;
+      if (!selected[index].selected) return;
       if (layer.cls.role === 'windows') glass.drawImage(layer.bitmap, layer.x, layer.y);
-      if (index > top) {
-        this.draw(over, layer);
-        return;
-      }
-      this.draw(bg, layer, selection);
+      if (index > top) return;
       mask.globalCompositeOperation = layer.cls.role === 'paint' ? 'source-over' : 'destination-out';
       mask.drawImage(layer.bitmap, layer.x, layer.y);
     });
     mask.globalCompositeOperation = 'source-over';
+    if (this.axisTemplate !== template) {
+      this.mirrorAxis = findMirrorAxis((size) => this.samplePaintMask(size), TEXTURE_SIZE)?.y;
+      this.axisTemplate = template;
+    }
+    template.layers.forEach((layer, index) => {
+      if (!selected[index].selected) return;
+      if (index > top) this.draw(over, layer);
+      else this.draw(bg, layer, selected[index]);
+    });
     this.renderWeathering(look.weathering);
     this.renderGuide(guideOpacity);
   }
@@ -176,7 +199,7 @@ export class TemplateComposer {
         const zoneLook = look.zones[zone] ?? { variant: visibleIndex(variants) };
         // Designs may come from files or older versions; an unknown variant must not drop the zone.
         const variant = Math.min(Math.max(0, Math.trunc(zoneLook.variant) || 0), variants.length - 1);
-        return { selected: variants[variant] === layer, color: zoneLook.color, pattern: zoneLook.pattern };
+        return { selected: variants[variant] === layer, color: zoneLook.color, pattern: zoneLook.pattern, gradient: zoneLook.gradient };
       }
       case 'wheels':
         return { selected: parts.wheels[Math.min(Math.max(0, Math.trunc(look.wheels) || 0), parts.wheels.length - 1)] === layer };
@@ -189,27 +212,69 @@ export class TemplateComposer {
 
   private draw(ctx: CanvasRenderingContext2D, layer: TemplateLayer, paint: Paint = {}): void {
     ctx.globalAlpha = layer.opacity;
-    ctx.drawImage(paint.pattern || paint.color ? this.painted(layer, paint) : layer.bitmap, layer.x, layer.y);
+    ctx.drawImage(paint.pattern || paint.gradient || paint.color ? this.painted(layer, paint) : layer.bitmap, layer.x, layer.y);
     ctx.globalAlpha = 1;
   }
 
-  /** The layer's shape filled with a colour or a pattern. */
-  private painted(layer: TemplateLayer, { color, pattern }: Paint): HTMLCanvasElement {
+  /** The layer's shape filled with a colour, a pattern or a gradient. */
+  private painted(layer: TemplateLayer, { color, pattern, gradient }: Paint): HTMLCanvasElement {
     const { scratch } = this;
     const { width, height } = layer.bitmap;
     scratch.width = width;
     scratch.height = height;
     const ctx = context(scratch);
     ctx.drawImage(layer.bitmap, 0, 0);
-    ctx.globalCompositeOperation = 'source-in';
+    // source-atop, not source-in: source-in clears everything outside each fill, which
+    // would wipe the first half of a two-part height gradient.
+    ctx.globalCompositeOperation = 'source-atop';
     if (pattern) {
       // The pattern lives in texture coordinates, so zones sharing a pattern line up.
       ctx.drawImage(patternCanvas(pattern), layer.x, layer.y, width, height, 0, 0, width, height);
+    } else if (gradient) {
+      this.fillGradient(ctx, layer, gradient);
     } else {
       ctx.fillStyle = color!;
       ctx.fillRect(0, 0, width, height);
     }
     ctx.globalCompositeOperation = 'source-over';
     return scratch;
+  }
+
+  /** Paints a zone gradient into the layer's own coordinates (the scratch canvas). */
+  private fillGradient(ctx: CanvasRenderingContext2D, layer: TemplateLayer, { from, to, direction }: ZoneGradient): void {
+    const { width, height } = layer.bitmap;
+    const axis = this.mirrorAxis;
+    if (direction === 'length') {
+      const g = ctx.createLinearGradient(0, 0, width, 0);
+      g.addColorStop(0, from);
+      g.addColorStop(1, to);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, width, height);
+      return;
+    }
+    if (axis === undefined) {
+      // Without mirrored sides, height simply runs down the texture.
+      const g = ctx.createLinearGradient(0, height, 0, 0);
+      g.addColorStop(0, from);
+      g.addColorStop(1, to);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, width, height);
+      return;
+    }
+    // From the sills, the rows farthest from the axis, to the roof centre on the axis:
+    // the upper side lies upside down, so its half of the gradient runs the other way.
+    const middle = axis - layer.y;
+    const reach = Math.max(Math.abs(middle), Math.abs(height - middle), 1);
+    for (const [start, end] of [
+      [middle - reach, Math.max(0, Math.min(height, middle))],
+      [middle + reach, Math.max(0, Math.min(height, middle))],
+    ]) {
+      const g = ctx.createLinearGradient(0, start, 0, middle);
+      g.addColorStop(0, from);
+      g.addColorStop(1, to);
+      ctx.fillStyle = g;
+      if (start < middle) ctx.fillRect(0, 0, width, end);
+      else ctx.fillRect(0, end, width, height - end);
+    }
   }
 }

@@ -19,6 +19,7 @@ import {
   IText,
   InteractiveFabricObject,
   Path,
+  Pattern,
   Point,
   Rect,
   config,
@@ -30,19 +31,32 @@ import {
 } from 'fabric';
 import { DEFAULT_BRUSH, pullTip, stringLength, strokePath, type BrushStyle } from '../lib/brush.ts';
 import { TemplateComposer, defaultLook, type CarParts, type Look, type ZoneLook } from '../lib/composition.ts';
+import { fillColor, gradientCoords, gradientEnd, sanitizeFill, type FillSpec } from '../lib/fills.ts';
 import { DEFAULT_FLAME_COLORS, FLAME_WIDTH, flamePath } from '../lib/flames.ts';
 import { fontWeightFor } from '../lib/fonts.ts';
-import { DEFAULT_LINE_STYLE, MAX_LINE_POINTS, lineStyleOf, type LinePoint, type LineSpec, type LineStyle } from '../lib/lines.ts';
+import {
+  DEFAULT_AREA_STYLE,
+  DEFAULT_LINE_STYLE,
+  MAX_LINE_POINTS,
+  MIN_AREA_POINTS,
+  lineStyleOf,
+  type AreaStyle,
+  type LinePoint,
+  type LineStyle,
+} from '../lib/lines.ts';
+import { patternCanvas } from '../lib/patterns.ts';
 import { snapBox, type Guide } from '../lib/snapping.ts';
 import { DEFAULT_STICKERS, checkeredFlagCanvas, type StickerSpec, type StickerStyle } from '../lib/stickers.ts';
 import type { Weathering } from '../lib/weathering.ts';
 import { randomSeed } from '../lib/random.ts';
-import { findMirrorAxis, otherSide } from '../lib/symmetry.ts';
+import { otherSide } from '../lib/symmetry.ts';
 import type { PaintZone } from '../lib/templateLayers.ts';
 import { TEXTURE_SIZE, type CarTemplate } from '../lib/templateTypes.ts';
+import { Area } from './Area.ts';
+import { WhiteToAlpha } from './filters.ts';
 import { Pinstripe } from './Pinstripe.ts';
 
-export type LayerKind = 'logo' | 'image' | 'text' | 'shape' | 'flames' | 'sticker' | 'line' | 'brush';
+export type LayerKind = 'logo' | 'image' | 'text' | 'shape' | 'flames' | 'sticker' | 'line' | 'brush' | 'area' | 'group';
 
 /**
  * Where a layer sits: clipped to the paint (below windows and lights), clipped to the
@@ -89,24 +103,37 @@ export interface LayerProps {
   fontWeight?: string;
   fontStyle?: string;
   charSpacing?: number;
+  /** Bend of a text layer: positive like an arch, negative like a smile, 0 straight. */
+  textArc?: number;
   /** Solid recolour of a logo or image, or undefined for the original colours. */
   tint?: string;
+  /** Whether a logo or image has its white background removed. */
+  removeWhite?: boolean;
   /** Base, middle and tip colour of a flame layer. */
   flameColors?: string[];
   sticker?: StickerSpec;
   line?: LineStyle;
+  /** Whether a free area runs as a curve through its points. */
+  smooth?: boolean;
+  /** Gradient or pattern instead of the plain `fill` colour. */
+  fillSpec?: FillSpec;
   /** Colour of the strokes of a freehand layer. */
   brushColor?: string;
 }
 
-export type LayerPatch = Partial<Omit<LayerProps, 'id' | 'kind' | 'tint' | 'sticker' | 'line'>> & {
+export type LayerPatch = Partial<Omit<LayerProps, 'id' | 'kind' | 'tint' | 'sticker' | 'line' | 'fillSpec'>> & {
   tint?: string | null;
+  /** null switches back to the plain colour. */
+  fillSpec?: FillSpec | null;
   sticker?: Partial<StickerSpec>;
   line?: Partial<LineStyle>;
 };
 
 /** The drawing tool in use: while it is active, clicks on the canvas draw instead of select. */
-export type ToolState = { kind: 'line'; points: number; style: LineStyle } | { kind: 'brush'; style: BrushStyle };
+export type ToolState =
+  | { kind: 'line'; points: number; style: LineStyle }
+  | { kind: 'area'; points: number; style: AreaStyle }
+  | { kind: 'brush'; style: BrushStyle };
 
 export interface EditorSnapshot {
   carId?: string;
@@ -116,6 +143,8 @@ export interface EditorSnapshot {
   layers: LayerInfo[];
   selection: string[];
   selected?: LayerProps;
+  /** Whether the selected layers can become one group: two or more, all in the same area. */
+  canGroup: boolean;
   tool?: ToolState;
   /** Texture y of the car's centre line between its two mirrored sides, if found. */
   mirrorAxis?: number;
@@ -141,16 +170,34 @@ interface Tags {
   flameColors?: string[];
   /** Stickers are rebuilt from their spec on every change. */
   stickerSpec?: StickerSpec;
+  fillSpec?: FillSpec;
+  /** Texts are bent along an arc rebuilt from this value. */
+  textArc?: number;
 }
 type Tagged = FabricObject & Partial<Tags>;
 const tagged = (o: FabricObject) => o as Tagged;
 
-/** A pinstripe being drawn: the clicked points plus the point under the pointer. */
-interface LineTool {
-  kind: 'line';
+/** Layers can be grouped when there are two or more and they all sit in the same area. */
+const groupable = (objects: Tagged[]) => objects.length > 1 && objects.every((o) => (o.clip ?? 'paint') === (objects[0].clip ?? 'paint'));
+
+/** Visits a layer and, in groups, everything inside them. */
+function eachObject(o: FabricObject, visit: (o: Tagged) => void): void {
+  visit(tagged(o));
+  if (o instanceof Group) for (const child of o.getObjects()) eachObject(child, visit);
+}
+
+/** Visits a serialized layer and, in groups, everything inside them. */
+function eachData(data: Record<string, unknown>, visit: (data: Record<string, unknown>) => void): void {
+  visit(data);
+  if (Array.isArray(data.objects)) for (const child of data.objects as Record<string, unknown>[]) eachData(child, visit);
+}
+
+/** A pinstripe or free area being drawn: the clicked points plus the point under the pointer. */
+interface PointTool {
+  kind: 'line' | 'area';
   points: Point[];
   hover?: Point;
-  preview?: Pinstripe;
+  preview?: Pinstripe | Area;
 }
 
 /** A freehand session: every stroke lands in the same layer. */
@@ -182,6 +229,8 @@ FabricObject.customProperties = [
   'flameColors',
   'stickerSpec',
   'lineSpec',
+  'fillSpec',
+  'textArc',
   // Fabric does not serialize it by default, but it is how a layer is locked.
   'selectable',
 ];
@@ -212,6 +261,21 @@ if (!original.halo) {
   };
   withHalo.halo = true; // module re-evaluation (hot reload) must not wrap twice
   InteractiveFabricObject.prototype.strokeBorders = withHalo;
+}
+// Text on a path is measured by its path alone; grow the box by the letters around
+// the path, so selection frame, snapping and cache cover them.
+type InitDimensions = typeof IText.prototype.initDimensions & { padded?: true };
+const initDimensions = IText.prototype.initDimensions as InitDimensions;
+if (!initDimensions.padded) {
+  const padded: InitDimensions = function (this: IText) {
+    initDimensions.call(this);
+    if (this.path) {
+      this.width += this.fontSize;
+      this.height += this.fontSize;
+    }
+  };
+  padded.padded = true; // module re-evaluation (hot reload) must not wrap twice
+  IText.prototype.initDimensions = padded;
 }
 // Clipped objects render through their own cache canvas; allow larger caches so
 // text stays crisp when zoomed in.
@@ -258,13 +322,14 @@ export class LiveryEditor {
   private spaceDown = false;
   private panFrom?: { x: number; y: number };
 
-  private tool?: LineTool | BrushTool;
+  private tool?: PointTool | BrushTool;
   private mirrorAxis?: number;
   private snapping = true;
   /** Lines shown while a moved layer has snapped. */
   private guides: Guide[] = [];
   /** Style for the next line and brush stroke: whatever was used last. */
   private lineStyle: LineStyle = { ...DEFAULT_LINE_STYLE };
+  private areaStyle: AreaStyle = { ...DEFAULT_AREA_STYLE };
   private brushStyle: BrushStyle = { ...DEFAULT_BRUSH };
 
   private readonly host: HTMLElement;
@@ -359,17 +424,13 @@ export class LiveryEditor {
         .reverse(),
       selection: active.map((o) => o.id!).filter(Boolean),
       selected: single ? this.propsOf(single) : undefined,
-      tool:
-        this.tool?.kind === 'line'
-          ? { kind: 'line', points: this.tool.points.length, style: this.lineStyle }
-          : this.tool?.kind === 'brush'
-            ? { kind: 'brush', style: this.brushStyle }
-            : undefined,
+      canGroup: groupable(active),
+      tool: this.toolState(),
       mirrorAxis: this.mirrorAxis,
       snapping: this.snapping,
       guideOpacity: this.guideOpacity,
       zoom: this.canvas.getZoom(),
-      canUndo: this.past.length > 0 || (this.tool?.kind === 'line' && this.tool.points.length > 0),
+      canUndo: this.past.length > 0 || (this.pointTool()?.points.length ?? 0) > 0,
       canRedo: this.future.length > 0,
       revision: this.revision,
     };
@@ -396,14 +457,17 @@ export class LiveryEditor {
     if (o instanceof FabricImage) {
       const tint = o.filters.find((f) => f instanceof filters.BlendColor);
       props.tint = tint?.color;
+      props.removeWhite = o.filters.some((f) => f instanceof WhiteToAlpha);
     } else {
-      props.fill = typeof o.fill === 'string' ? o.fill : undefined;
+      props.fill = o.fillSpec ? fillColor(o.fillSpec) : typeof o.fill === 'string' ? o.fill : undefined;
+      props.fillSpec = o.fillSpec;
       props.stroke = typeof o.stroke === 'string' ? o.stroke : undefined;
       props.strokeWidth = o.strokeWidth;
     }
     if (o.kind === 'flames') props.flameColors = o.flameColors ?? [...DEFAULT_FLAME_COLORS];
     if (o.kind === 'sticker' && o.stickerSpec) props.sticker = o.stickerSpec;
     if (o instanceof Pinstripe) props.line = lineStyleOf(o.lineSpec);
+    if (o instanceof Area) props.smooth = o.areaSpec.smooth;
     if (o.kind === 'brush' && o instanceof Group) {
       const stroke = o.getObjects()[0]?.stroke;
       props.brushColor = typeof stroke === 'string' ? stroke : undefined;
@@ -414,6 +478,7 @@ export class LiveryEditor {
       props.fontWeight = String(o.fontWeight);
       props.fontStyle = o.fontStyle;
       props.charSpacing = o.charSpacing;
+      props.textArc = tagged(o).textArc ?? 0;
     }
     return props;
   }
@@ -430,7 +495,7 @@ export class LiveryEditor {
       this.look = design?.look ?? defaultLook(this.parts);
       this.cancelLook();
       this.composer.render(this.look, this.guideOpacity);
-      this.mirrorAxis = findMirrorAxis((size) => this.composer.samplePaintMask(size), TEXTURE_SIZE)?.y;
+      this.mirrorAxis = this.composer.mirrorAxis;
       this.canvas.backgroundImage = this.backgroundImage;
       this.showGuide();
       await this.replaceObjects(design ? await this.objectsFromDesign(design) : []);
@@ -739,7 +804,11 @@ export class LiveryEditor {
     if (axis === undefined) return Promise.resolve();
     return this.copySelected((copy, original) => {
       const center = original.getCenterPoint();
-      const target = otherSide({ x: center.x, y: center.y, angle: original.angle, flipY: original.flipY }, axis, READABLE.has(original.kind ?? 'shape'));
+      let readable = false;
+      eachObject(original, (o) => {
+        if (READABLE.has(o.kind ?? 'shape')) readable = true;
+      });
+      const target = otherSide({ x: center.x, y: center.y, angle: original.angle, flipY: original.flipY }, axis, readable);
       copy.set({ angle: target.angle, flipY: target.flipY });
       copy.setPositionByOrigin(new Point(target.x, target.y), 'center', 'center');
     });
@@ -762,6 +831,56 @@ export class LiveryEditor {
       this.canvas.setActiveObject(copy);
       this.canvas.requestRenderAll();
     });
+  }
+
+  /** Turns the selected layers into one group layer, in the place of the top-most of them. */
+  groupSelected(): void {
+    const selection = this.canvas.getActiveObject();
+    if (!(selection instanceof ActiveSelection) || !groupable(selection.getObjects())) return;
+    // Taken before the selection is dissolved, which empties it.
+    const members = [...selection.getObjects()] as Tagged[];
+    const clip = members[0].clip ?? 'paint';
+    this.canvas.discardActiveObject();
+    const order = this.canvas.getObjects();
+    // Back in canvas coordinates now; keep their stacking order inside the group.
+    members.sort((a, b) => order.indexOf(a) - order.indexOf(b));
+    const index = order.indexOf(members.at(-1)!) - (members.length - 1);
+    this.quietly(() => this.canvas.remove(...members));
+    // The group clips them all at once.
+    for (const member of members) member.clipPath = undefined;
+    const group = new Group(members);
+    this.register(group, 'group', 'Gruppe', clip);
+    this.quietly(() => this.canvas.insertAt(index, group));
+    this.normalizeStack();
+    this.canvas.setActiveObject(group);
+    this.canvas.requestRenderAll();
+    this.changed();
+  }
+
+  /** Splits the selected group back into its layers, where they were, and selects them. */
+  ungroupSelected(): void {
+    const group = this.canvas.getActiveObject();
+    if (!(group instanceof Group) || tagged(group).kind !== 'group') return;
+    const index = this.canvas.getObjects().indexOf(group);
+    const clip = tagged(group).clip ?? 'paint';
+    this.canvas.discardActiveObject();
+    // Leaving the group applies its move, rotation and scale to each layer.
+    const members = group.removeAll() as Tagged[];
+    this.quietly(() => {
+      this.canvas.remove(group);
+      this.canvas.insertAt(index, ...members);
+    });
+    for (const member of members) {
+      member.clip = clip;
+      this.applyClip(member);
+      this.applyHitTesting(member);
+      // A scaled group leaves its patterns stretched until they are rebuilt.
+      eachObject(member, (o) => this.applyFill(o));
+    }
+    this.normalizeStack();
+    this.canvas.setActiveObject(new ActiveSelection(members, { canvas: this.canvas }));
+    this.canvas.requestRenderAll();
+    this.changed();
   }
 
   /**
@@ -828,7 +947,7 @@ export class LiveryEditor {
     const active = this.canvas.getActiveObjects() as Tagged[];
     if (active.length !== 1) return;
     const o = active[0];
-    const { name, clip, tint, flameColors, sticker, line, brushColor, ...rest } = patch;
+    const { name, clip, tint, removeWhite, flameColors, sticker, line, smooth, brushColor, fillSpec, textArc, ...rest } = patch;
     if (sticker && o.kind === 'sticker' && o.stickerSpec) {
       // Rebuilt as a whole: the badge size depends on text and font.
       this.swap(o, this.createSticker({ ...o.stickerSpec, ...sticker }));
@@ -849,21 +968,106 @@ export class LiveryEditor {
       // The next line starts out the same, so a set of stripes stays consistent.
       this.lineStyle = { ...this.lineStyle, ...line };
     }
+    if (o instanceof Area) {
+      if (smooth !== undefined) o.setSpec({ smooth });
+      const { fill, stroke, strokeWidth } = rest;
+      this.areaStyle = {
+        ...this.areaStyle,
+        ...(typeof fill === 'string' && { fill }),
+        ...(typeof stroke === 'string' && { stroke }),
+        ...(strokeWidth !== undefined && { strokeWidth }),
+        ...(smooth !== undefined && { smooth }),
+      };
+    }
     if (brushColor && o instanceof Group && tagged(o).kind === 'brush') {
       for (const stroke of o.getObjects()) stroke.set('stroke', brushColor);
     }
-    if (tint !== undefined && o instanceof FabricImage) {
-      o.filters = tint ? [new filters.BlendColor({ color: tint, mode: 'tint', alpha: 1 })] : [];
+    if (fillSpec !== undefined) tagged(o).fillSpec = fillSpec ?? undefined;
+    if ((tint !== undefined || removeWhite !== undefined) && o instanceof FabricImage) {
+      const color = tint === undefined ? o.filters.find((f) => f instanceof filters.BlendColor)?.color : tint;
+      const white = removeWhite ?? o.filters.some((f) => f instanceof WhiteToAlpha);
+      // White goes first, so a recoloured logo keeps its shape instead of its background.
+      o.filters = [...(white ? [new WhiteToAlpha()] : []), ...(color ? [new filters.BlendColor({ color, mode: 'tint', alpha: 1 })] : [])];
       o.applyFilters();
     }
+    if (textArc !== undefined) tagged(o).textArc = textArc;
     if (Object.keys(rest).length > 0) {
       o.set(rest);
       if (o instanceof IText) o.initDimensions();
     }
+    // Text, font and spacing change the length of the arc.
+    this.applyTextArc(o);
+    // Last, as a pattern depends on the layer's size.
+    this.applyFill(o);
     o.set('dirty', true);
     o.setCoords();
     this.canvas.requestRenderAll();
     this.changed();
+  }
+
+  /**
+   * Bends a text along an arc as long as the straight text, so the letters keep their
+   * spacing; 100 % is a half circle. Bent text is edited in the panel: Fabric's caret
+   * does not follow a path.
+   */
+  private applyTextArc(o: Tagged): void {
+    if (!(o instanceof IText)) return;
+    const arc = Math.max(-100, Math.min(100, tagged(o).textArc ?? 0));
+    if (o.path) {
+      o.set('path', undefined);
+      o.initDimensions();
+    }
+    o.editable = arc === 0;
+    if (arc === 0) return;
+    const angle = (Math.abs(arc) / 100) * Math.PI;
+    const radius = o.width / angle;
+    const x = radius * Math.sin(angle / 2);
+    const y = radius * (1 - Math.cos(angle / 2));
+    // An arch runs over the top of its circle, a smile along the bottom; both left to right.
+    const d = arc > 0 ? `M ${-x} ${y} A ${radius} ${radius} 0 0 1 ${x} ${y}` : `M ${-x} ${-y} A ${radius} ${radius} 0 0 0 ${x} ${-y}`;
+    o.set({ path: new Path(d, { visible: false }), pathAlign: 'center', pathSide: 'left' });
+    o.setPathInfo();
+    o.initDimensions();
+    o.setCoords();
+  }
+
+  /**
+   * Rebuilds a gradient or pattern fill from its spec. A pattern is the paint's full
+   * texture-sized pattern image, centred on the layer and kept at texture scale however
+   * the layer is sized, so it never changes when the layer grows (typing, say).
+   */
+  private applyFill(o: Tagged): void {
+    const spec = o.fillSpec;
+    if (!spec) return;
+    if (spec.kind === 'gradient') {
+      o.set(
+        'fill',
+        new Gradient({
+          type: 'linear',
+          gradientUnits: 'percentage',
+          coords: gradientCoords(spec.angle),
+          colorStops: [
+            { offset: 0, color: spec.from },
+            { offset: 1, color: gradientEnd(spec) },
+          ],
+        }),
+      );
+    } else {
+      const scaling = o.getObjectScaling();
+      const sx = Math.abs(scaling.x) || 1;
+      const sy = Math.abs(scaling.y) || 1;
+      // Fabric places a pattern at the layer's top-left corner; move the image's centre to the layer's centre.
+      const half = TEXTURE_SIZE / 2;
+      o.set(
+        'fill',
+        new Pattern({
+          source: patternCanvas(spec.pattern),
+          repeat: 'repeat',
+          patternTransform: [1 / sx, 0, 0, 1 / sy, o.width / 2 - half / sx, o.height / 2 - half / sy],
+        }),
+      );
+    }
+    o.set('dirty', true);
   }
 
   private find(id: string): Tagged | undefined {
@@ -884,9 +1088,9 @@ export class LiveryEditor {
     o.set('dirty', true);
   }
 
-  /** Freehand layers are mostly empty space: only their strokes count as a hit. */
+  /** Freehand layers and groups are mostly empty space: only what is drawn counts as a hit. */
   private applyHitTesting(o: Tagged): void {
-    if (o.kind === 'brush') o.perPixelTargetFind = true;
+    if (o.kind === 'brush' || o.kind === 'group') o.perPixelTargetFind = true;
   }
 
   private registerAsset(source: AssetSource, blob: Blob, id: string = crypto.randomUUID()): string {
@@ -898,9 +1102,18 @@ export class LiveryEditor {
 
   /** Starts drawing a pinstripe: every click on the canvas adds a point. */
   startLine(): void {
+    this.startPoints('line');
+  }
+
+  /** Starts drawing a free area: every click adds a corner, the shape closes itself. */
+  startArea(): void {
+    this.startPoints('area');
+  }
+
+  private startPoints(kind: PointTool['kind']): void {
     this.endTool();
     this.canvas.discardActiveObject();
-    this.tool = { kind: 'line', points: [] };
+    this.tool = { kind, points: [] };
     this.updateInteraction();
     this.canvas.requestRenderAll();
     this.emit();
@@ -918,16 +1131,16 @@ export class LiveryEditor {
     this.emit();
   }
 
-  /** Finishes the active tool and selects what it drew. A line needs at least two points. */
+  /** Finishes the active tool and selects what it drew. A line needs two points, an area three. */
   endTool(): void {
     const tool = this.tool;
     if (!tool) return;
     let result: Tagged | undefined;
-    if (tool.kind === 'line') {
-      result = this.finishLine(tool);
-    } else {
+    if (tool.kind === 'brush') {
       this.finishStroke(tool);
       result = tool.layerId ? this.find(tool.layerId) : undefined;
+    } else {
+      result = this.finishPoints(tool);
     }
     this.closeTool();
     if (result) this.canvas.setActiveObject(result);
@@ -935,15 +1148,15 @@ export class LiveryEditor {
     this.emit();
   }
 
-  /** Leaves the active tool; a line in progress is dropped. */
+  /** Leaves the active tool; a line or area in progress is dropped. */
   cancelTool(): void {
     const tool = this.tool;
     if (!tool) return;
-    if (tool.kind === 'line') {
+    if (tool.kind === 'brush') {
+      this.finishStroke(tool);
+    } else {
       const { preview } = tool;
       if (preview) this.quietly(() => this.canvas.remove(preview));
-    } else {
-      this.finishStroke(tool);
     }
     this.closeTool();
     this.canvas.requestRenderAll();
@@ -952,7 +1165,15 @@ export class LiveryEditor {
 
   setLineStyle(patch: Partial<LineStyle>): void {
     this.lineStyle = { ...this.lineStyle, ...patch };
-    if (this.tool?.kind === 'line') this.updateLinePreview(this.tool);
+    const tool = this.pointTool();
+    if (tool?.kind === 'line') this.updatePreview(tool);
+    this.emit();
+  }
+
+  setAreaStyle(patch: Partial<AreaStyle>): void {
+    this.areaStyle = { ...this.areaStyle, ...patch };
+    const tool = this.pointTool();
+    if (tool?.kind === 'area') this.updatePreview(tool);
     this.emit();
   }
 
@@ -960,6 +1181,18 @@ export class LiveryEditor {
     this.brushStyle = { ...this.brushStyle, ...patch };
     if (this.tool) this.canvas.renderTop();
     this.emit();
+  }
+
+  private toolState(): ToolState | undefined {
+    const tool = this.tool;
+    if (tool?.kind === 'line') return { kind: 'line', points: tool.points.length, style: this.lineStyle };
+    if (tool?.kind === 'area') return { kind: 'area', points: tool.points.length, style: this.areaStyle };
+    if (tool?.kind === 'brush') return { kind: 'brush', style: this.brushStyle };
+    return undefined;
+  }
+
+  private pointTool(): PointTool | undefined {
+    return this.tool && this.tool.kind !== 'brush' ? this.tool : undefined;
   }
 
   private closeTool(): void {
@@ -971,45 +1204,51 @@ export class LiveryEditor {
   /** What is being drawn right now and is not a layer yet. */
   private toolObjects(): Tagged[] {
     const tool = this.tool;
-    const o = tool?.kind === 'line' ? tool.preview : tool?.stroke?.path;
+    const o = tool?.kind === 'brush' ? tool.stroke?.path : tool?.preview;
     return o ? [o] : [];
   }
 
   private toolDown(e: MouseEvent, at: Point): void {
     const tool = this.tool!;
-    if (tool.kind === 'line') this.addLinePoint(tool, at, e.shiftKey);
-    else this.startStroke(tool, at);
+    if (tool.kind === 'brush') this.startStroke(tool, at);
+    else this.addPoint(tool, at, e.shiftKey);
   }
 
   private toolMove(e: MouseEvent, at: Point): void {
     const tool = this.tool!;
-    if (tool.kind === 'line') {
-      tool.hover = this.linePoint(tool, at, e.shiftKey);
-      this.updateLinePreview(tool);
-    } else {
+    if (tool.kind === 'brush') {
       this.continueStroke(tool, at);
+    } else {
+      tool.hover = this.snappedPoint(tool, at, e.shiftKey);
+      this.updatePreview(tool);
     }
   }
 
   /** The pointer left the canvas: no rubber band, no brush outline. */
   private toolLeave(): void {
     const tool = this.tool;
-    if (tool?.kind === 'line' && tool.hover) {
-      tool.hover = undefined;
-      this.updateLinePreview(tool);
-    } else if (tool?.kind === 'brush' && !tool.stroke) {
+    if (tool?.kind === 'brush') {
+      if (tool.stroke) return;
       tool.pointer = undefined;
       this.canvas.renderTop();
+    } else if (tool?.hover) {
+      tool.hover = undefined;
+      this.updatePreview(tool);
     }
   }
 
   /** Whether two points are on the same spot on screen, like the two clicks of a double click. */
-  private samePlace(a: Point, b: Point): boolean {
-    return a.distanceFrom(b) * this.canvas.getZoom() < 4;
+  private samePlace(a: Point, b: Point, pixels = 4): boolean {
+    return a.distanceFrom(b) * this.canvas.getZoom() < pixels;
+  }
+
+  /** Whether a click at this point closes the area: on its first corner, once it has three. */
+  private closesArea(tool: PointTool, at: Point): boolean {
+    return tool.kind === 'area' && tool.points.length >= MIN_AREA_POINTS && this.samePlace(tool.points[0], at, 10);
   }
 
   /** With Shift, a new segment snaps to 15° steps, like rotating. */
-  private linePoint(tool: LineTool, at: Point, shift: boolean): Point {
+  private snappedPoint(tool: PointTool, at: Point, shift: boolean): Point {
     const last = tool.points.at(-1);
     if (!shift || !last) return at;
     const step = Math.PI / 12;
@@ -1018,57 +1257,70 @@ export class LiveryEditor {
     return new Point(last.x + Math.cos(angle) * length, last.y + Math.sin(angle) * length);
   }
 
-  private addLinePoint(tool: LineTool, at: Point, shift: boolean): void {
-    const point = this.linePoint(tool, at, shift);
+  private addPoint(tool: PointTool, at: Point, shift: boolean): void {
+    if (this.closesArea(tool, at)) {
+      tool.hover = undefined;
+      this.endTool();
+      return;
+    }
+    const point = this.snappedPoint(tool, at, shift);
     const last = tool.points.at(-1);
     if ((last && this.samePlace(last, point)) || tool.points.length >= MAX_LINE_POINTS) return;
     tool.points.push(point);
-    this.updateLinePreview(tool);
+    this.updatePreview(tool);
     this.emit();
   }
 
   private removeLastPoint(): void {
-    const tool = this.tool;
-    if (tool?.kind !== 'line' || tool.points.length === 0) return;
+    const tool = this.pointTool();
+    if (!tool || tool.points.length === 0) return;
     tool.points.pop();
-    this.updateLinePreview(tool);
+    this.updatePreview(tool);
     this.emit();
   }
 
-  /** Shows the line as it will look, with the rubber band segment to the pointer. */
-  private updateLinePreview(tool: LineTool): void {
+  /** Shows the line or area as it will look, with the rubber band to the pointer. */
+  private updatePreview(tool: PointTool): void {
     const points = [...tool.points];
     const last = points.at(-1);
-    if (tool.hover && last && !this.samePlace(last, tool.hover)) points.push(tool.hover);
+    const hover = tool.hover && !this.closesArea(tool, tool.hover) ? tool.hover : undefined;
+    if (hover && last && !this.samePlace(last, hover)) points.push(hover);
+    const coords = points.map((p): LinePoint => [p.x, p.y]);
+    const { preview } = tool;
     if (points.length < 2) {
-      const { preview } = tool;
       if (preview) this.quietly(() => this.canvas.remove(preview));
       tool.preview = undefined;
+    } else if (preview instanceof Pinstripe) {
+      preview.setSpec({ ...this.lineStyle, points: coords });
+    } else if (preview instanceof Area) {
+      const { smooth, ...paint } = this.areaStyle;
+      preview.set(paint);
+      preview.setSpec({ points: coords, smooth });
     } else {
-      const spec: LineSpec = { ...this.lineStyle, points: points.map((p): LinePoint => [p.x, p.y]) };
-      if (tool.preview) {
-        tool.preview.setSpec(spec);
-      } else {
-        const preview = new Pinstripe(spec, { selectable: false, evented: false });
-        tagged(preview).clip = 'paint';
-        this.applyClip(preview);
-        tool.preview = preview;
-        this.quietly(() => this.canvas.insertAt(this.canvas.getObjects().indexOf(this.weatheringPlane), preview));
-      }
+      const options = { selectable: false, evented: false };
+      const { smooth, ...paint } = this.areaStyle;
+      const created =
+        tool.kind === 'line'
+          ? new Pinstripe({ ...this.lineStyle, points: coords }, options)
+          : new Area({ points: coords, smooth }, { ...options, ...paint });
+      tagged(created).clip = 'paint';
+      this.applyClip(created);
+      tool.preview = created;
+      this.quietly(() => this.canvas.insertAt(this.canvas.getObjects().indexOf(this.weatheringPlane), created));
     }
     this.canvas.requestRenderAll();
   }
 
-  private finishLine(tool: LineTool): Tagged | undefined {
+  private finishPoints(tool: PointTool): Tagged | undefined {
     const { preview } = tool;
     if (!preview) return undefined;
-    if (tool.points.length < 2) {
+    if (tool.points.length < (tool.kind === 'line' ? 2 : MIN_AREA_POINTS)) {
       this.quietly(() => this.canvas.remove(preview));
       return undefined;
     }
-    preview.setSpec({ points: tool.points.map((p): LinePoint => [p.x, p.y]) });
+    preview.setPoints(tool.points.map((p): LinePoint => [p.x, p.y]));
     preview.set({ selectable: true, evented: true });
-    this.register(preview, 'line', 'Zierlinie', 'paint');
+    this.register(preview, tool.kind, tool.kind === 'line' ? 'Zierlinie' : 'Fläche', 'paint');
     this.normalizeStack();
     this.changed();
     return preview;
@@ -1166,8 +1418,10 @@ export class LiveryEditor {
     };
     ctx.save();
     ctx.setTransform(retina, 0, 0, retina, 0, 0);
-    if (tool.kind === 'line') {
-      for (const p of tool.points) circle(p, 4.5, '#ffffff');
+    if (tool.kind !== 'brush') {
+      // The first corner of an area grows when a click on it would close the shape.
+      const closing = tool.hover && this.closesArea(tool, tool.hover);
+      tool.points.forEach((p, i) => circle(p, i === 0 && closing ? 7 : 4.5, i === 0 && closing ? ACCENT : '#ffffff'));
     } else if (tool.pointer) {
       const { stroke, pointer } = tool;
       if (stroke && stroke.tip.distanceFrom(pointer) > 0) {
@@ -1199,8 +1453,21 @@ export class LiveryEditor {
   // ---- serialization and history ---------------------------------------------
 
   private serialize(o: Tagged): Record<string, unknown> {
+    // A pattern image is rebuilt from its spec: serializing it would cost a data URL per
+    // history step, and files must not carry images in fills anyway.
+    const patterned: [Tagged, Tagged['fill']][] = [];
+    eachObject(o, (node) => {
+      if (node.fillSpec?.kind !== 'pattern') return;
+      patterned.push([node, node.fill]);
+      node.fill = fillColor(node.fillSpec);
+    });
     const data = o.toObject() as Record<string, unknown>;
+    for (const [node, fill] of patterned) node.fill = fill;
     delete data.clipPath;
+    eachData(data, (d) => {
+      // The arc of bent text is rebuilt from `textArc`.
+      if (d.type === 'IText') delete d.path;
+    });
     return data;
   }
 
@@ -1212,6 +1479,12 @@ export class LiveryEditor {
         if (clip !== 'paint' && clip !== 'windows' && clip !== 'none') o.clip = clip === false ? 'none' : 'paint';
         this.applyClip(o);
         this.applyHitTesting(o);
+        eachObject(o, (node) => {
+          // A broken fill spec (from an older autosave, say) falls back to the stored colour.
+          node.fillSpec = sanitizeFill(node.fillSpec);
+          this.applyTextArc(node);
+          this.applyFill(node);
+        });
         if (!o.selectable) o.set({ evented: false });
       }
       return objects as Tagged[];
@@ -1263,7 +1536,7 @@ export class LiveryEditor {
   }
 
   undo(): Promise<void> {
-    if (this.tool?.kind === 'line' && this.tool.points.length > 0) {
+    if ((this.pointTool()?.points.length ?? 0) > 0) {
       this.removeLastPoint();
       return Promise.resolve();
     }
@@ -1277,7 +1550,7 @@ export class LiveryEditor {
   }
 
   redo(): Promise<void> {
-    if (this.tool?.kind === 'line') this.endTool();
+    if (this.pointTool()) this.endTool();
     return this.enqueue(async () => {
       this.flushCommit();
       const next = this.future.pop();
@@ -1309,13 +1582,17 @@ export class LiveryEditor {
     if (!this.template || !this.look) return undefined;
     const objects = this.userObjects().map((o) => {
       const data = this.serialize(o);
-      if (o.assetId) delete data.src;
+      eachData(data, (d) => {
+        if (d.assetId) delete d.src;
+      });
       return data;
     });
     const assets: Record<string, AssetSource> = {};
     for (const o of this.userObjects()) {
-      const asset = o.assetId ? this.assets.get(o.assetId) : undefined;
-      if (asset) assets[o.assetId!] = asset.source;
+      eachObject(o, (node) => {
+        const asset = node.assetId ? this.assets.get(node.assetId) : undefined;
+        if (asset) assets[node.assetId!] = asset.source;
+      });
     }
     return { version: 1, carId: this.template.vehicle.carId, look: this.look, objects, assets };
   }
@@ -1336,8 +1613,16 @@ export class LiveryEditor {
         console.warn(`Asset ${source.name} could not be restored`, err);
       }
     }
-    const objects = design.objects.filter((o) => !o.assetId || urls.has(o.assetId as string));
-    return this.restoreObjects(objects.map((o) => (o.assetId ? { ...o, src: urls.get(o.assetId as string) } : o)));
+    // Images get their source back; an image whose asset is gone is left out, inside groups too.
+    const resolve = (data: Record<string, unknown>): Record<string, unknown> | undefined => {
+      const assetId = data.assetId as string | undefined;
+      if (assetId && !urls.has(assetId)) return undefined;
+      const resolved = assetId ? { ...data, src: urls.get(assetId) } : data;
+      if (!Array.isArray(data.objects)) return resolved;
+      const objects = (data.objects as Record<string, unknown>[]).map(resolve).filter((o) => o !== undefined);
+      return objects.length > 0 ? { ...resolved, objects } : undefined;
+    };
+    return this.restoreObjects(design.objects.map(resolve).filter((o) => o !== undefined));
   }
 
   // ---- rendering ------------------------------------------------------------
@@ -1413,8 +1698,20 @@ export class LiveryEditor {
     const { canvas } = this;
     canvas.on('object:added', () => this.changed());
     canvas.on('object:removed', () => this.changed());
-    canvas.on('object:modified', () => this.changed());
-    canvas.on('text:changed', () => this.changed());
+    canvas.on('object:modified', ({ target }) => {
+      // A patterned layer that was scaled or reshaped needs a pattern image of its new size.
+      for (const o of target instanceof ActiveSelection ? target.getObjects() : [target]) {
+        eachObject(o, (node) => {
+          if (node.fillSpec?.kind === 'pattern') this.applyFill(node);
+        });
+      }
+      this.changed();
+    });
+    canvas.on('text:changed', ({ target }) => {
+      this.applyTextArc(target);
+      this.applyFill(target);
+      this.changed();
+    });
     canvas.on('selection:created', () => this.emit());
     canvas.on('selection:updated', () => this.emit());
     canvas.on('selection:cleared', () => this.emit());
@@ -1468,7 +1765,7 @@ export class LiveryEditor {
       }
     });
     canvas.on('mouse:dblclick', () => {
-      if (this.tool?.kind === 'line') this.endTool();
+      if (this.pointTool()) this.endTool();
     });
     canvas.on('mouse:out', ({ target }) => {
       if (!target) this.toolLeave();
@@ -1561,7 +1858,7 @@ export class LiveryEditor {
       this.endTool();
       return;
     }
-    if (this.tool?.kind === 'line' && !mod && (key === 'backspace' || key === 'delete')) {
+    if (this.pointTool() && !mod && (key === 'backspace' || key === 'delete')) {
       e.preventDefault();
       this.removeLastPoint();
       return;

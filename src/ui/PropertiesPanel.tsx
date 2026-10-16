@@ -1,10 +1,22 @@
-import { ArrowDownUp, Brush, Copy, Dices, FlipHorizontal2, FlipVertical2, Trash2 } from 'lucide-react';
-import type { ClipMode, LayerInfo, LayerProps, LiveryEditor, ToolState } from '../editor/LiveryEditor.ts';
+import { useRef } from 'react';
+import { ArrowDownUp, Brush, Copy, Dices, FlipHorizontal2, FlipVertical2, Group, Trash2, Ungroup } from 'lucide-react';
+import type { ClipMode, LayerInfo, LayerPatch, LayerProps, LiveryEditor, ToolState } from '../editor/LiveryEditor.ts';
 import { BRUSH_WIDTH_MAX, BRUSH_WIDTH_MIN } from '../lib/brush.ts';
+import { defaultGradient, defaultPatternFill, type FillSpec } from '../lib/fills.ts';
 import { DECAL_FONTS, fontWeightFor } from '../lib/fonts.ts';
-import { LINE_OUTLINE_MAX, LINE_PATTERNS, LINE_WIDTH_MAX, LINE_WIDTH_MIN, lineDashArray, type LinePattern, type LineStyle } from '../lib/lines.ts';
+import {
+  LINE_OUTLINE_MAX,
+  LINE_PATTERNS,
+  LINE_WIDTH_MAX,
+  LINE_WIDTH_MIN,
+  lineDashArray,
+  type AreaStyle,
+  type LinePattern,
+  type LineStyle,
+} from '../lib/lines.ts';
 import { STICKER_STYLES } from '../lib/stickers.ts';
 import { ColorField, Field, SliderField, Switch } from './controls.tsx';
+import { PatternControls } from './PatternControls.tsx';
 
 const FLAME_COLOR_LABELS = ['Ansatz', 'Mitte', 'Spitzen'];
 
@@ -22,6 +34,8 @@ interface Props {
   tool?: ToolState;
   /** The car has two mirrored sides, so a layer can be copied across. */
   canCopyToOtherSide: boolean;
+  /** The selected layers can be grouped. */
+  canGroup: boolean;
 }
 
 /** A short sample of the line pattern, drawn the way the editor draws it. */
@@ -31,6 +45,84 @@ function PatternSample({ pattern }: { pattern: LinePattern }) {
     <svg width="38" height="8" viewBox="0 0 38 8" aria-hidden>
       <line x1="3" y1="4" x2="35" y2="4" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeDasharray={dash?.join(' ')} />
     </svg>
+  );
+}
+
+const FILL_MODES = [
+  { mode: 'solid', label: 'Farbe' },
+  { mode: 'gradient', label: 'Verlauf' },
+  { mode: 'pattern', label: 'Muster' },
+] as const;
+
+/** Plain colour, gradient or pattern for shapes, areas and text. */
+function FillFields({ selected, update }: { selected: LayerProps; update: (patch: LayerPatch) => void }) {
+  // Switching back to a gradient or pattern brings back the one the layer had before.
+  const previous = useRef(new Map<string, FillSpec>());
+  const spec = selected.fillSpec;
+  const color = selected.fill ?? '#ffffff';
+  const mode = spec?.kind ?? 'solid';
+
+  const choose = (next: (typeof FILL_MODES)[number]['mode']) => {
+    if (next === mode) return;
+    if (spec) previous.current.set(`${selected.id}:${spec.kind}`, spec);
+    const kept = previous.current.get(`${selected.id}:${next}`);
+    if (next === 'solid') update({ fillSpec: null, fill: color });
+    else update({ fillSpec: kept ?? (next === 'gradient' ? defaultGradient(color) : defaultPatternFill()) });
+  };
+
+  return (
+    <>
+      <Field label="Füllung">
+        <div className="segmented" role="radiogroup" aria-label="Füllung">
+          {FILL_MODES.map(({ mode: m, label }) => (
+            <button key={m} type="button" role="radio" aria-checked={mode === m} aria-pressed={mode === m} onClick={() => choose(m)}>
+              {label}
+            </button>
+          ))}
+        </div>
+      </Field>
+      {mode === 'solid' && <ColorField label="Farbe" value={color} onChange={(fill) => update({ fill })} />}
+      {spec?.kind === 'gradient' && (
+        <>
+          <ColorField label="Start" value={spec.from} onChange={(from) => update({ fillSpec: { ...spec, from } })} />
+          {!spec.fade && <ColorField label="Ende" value={spec.to} onChange={(to) => update({ fillSpec: { ...spec, to } })} />}
+          <Switch
+            label="Ausblenden"
+            hint="Läuft ins Durchsichtige aus"
+            checked={spec.fade}
+            onChange={(fade) => update({ fillSpec: { ...spec, fade } })}
+          />
+          <SliderField
+            label="Richtung"
+            value={spec.angle}
+            min={0}
+            max={360}
+            step={5}
+            unit="°"
+            onChange={(angle) => update({ fillSpec: { ...spec, angle } })}
+          />
+        </>
+      )}
+      {spec?.kind === 'pattern' && (
+        <PatternControls spec={spec.pattern} onChange={(pattern) => update({ fillSpec: { kind: 'pattern', pattern } })} />
+      )}
+    </>
+  );
+}
+
+/** Smooth curve or straight segments through the points of a line or area. */
+function CurveField({ smooth, onChange }: { smooth: boolean; onChange: (smooth: boolean) => void }) {
+  return (
+    <Field label="Verlauf">
+      <div className="segmented" role="radiogroup" aria-label="Verlauf">
+        <button type="button" role="radio" aria-checked={smooth} aria-pressed={smooth} onClick={() => onChange(true)}>
+          Geschwungen
+        </button>
+        <button type="button" role="radio" aria-checked={!smooth} aria-pressed={!smooth} onClick={() => onChange(false)}>
+          Eckig
+        </button>
+      </div>
+    </Field>
   );
 }
 
@@ -65,16 +157,7 @@ function LineFields({ style, onChange }: { style: LineStyle; onChange: (patch: P
           ))}
         </div>
       </Field>
-      <Field label="Verlauf">
-        <div className="segmented" role="radiogroup" aria-label="Verlauf">
-          <button type="button" role="radio" aria-checked={style.smooth} aria-pressed={style.smooth} onClick={() => onChange({ smooth: true })}>
-            Geschwungen
-          </button>
-          <button type="button" role="radio" aria-checked={!style.smooth} aria-pressed={!style.smooth} onClick={() => onChange({ smooth: false })}>
-            Eckig
-          </button>
-        </div>
-      </Field>
+      <CurveField smooth={style.smooth} onChange={(smooth) => onChange({ smooth })} />
     </>
   );
 }
@@ -95,6 +178,31 @@ function ToolPanel({ editor, tool }: { editor: LiveryEditor; tool: ToolState }) 
           <dd>Letzten Punkt entfernen</dd>
           <dt>Doppelklick, Enter</dt>
           <dd>Linie fertig</dd>
+        </dl>
+      </section>
+    );
+  }
+  if (tool.kind === 'area') {
+    const { style } = tool;
+    const set = (patch: Partial<AreaStyle>) => editor.setAreaStyle(patch);
+    return (
+      <section className="panel-section props" aria-label="Fläche">
+        <h2 className="section-title">Fläche</h2>
+        <ColorField label="Farbe" value={style.fill} onChange={(fill) => set({ fill })} />
+        <ColorField label="Kontur" value={style.stroke} onChange={(stroke) => set({ stroke })} />
+        <SliderField label="Konturbreite" value={style.strokeWidth} min={0} max={40} onChange={(strokeWidth) => set({ strokeWidth })} />
+        <CurveField smooth={style.smooth} onChange={(smooth) => set({ smooth })} />
+        <dl className="shortcuts shortcuts-spaced">
+          <dt>Klick</dt>
+          <dd>Ecke setzen</dd>
+          <dt>Klick auf erste Ecke</dt>
+          <dd>Fläche schließen</dd>
+          <dt>Shift + Klick</dt>
+          <dd>In 15°-Schritten</dd>
+          <dt>Rücktaste</dt>
+          <dd>Letzte Ecke entfernen</dd>
+          <dt>Doppelklick, Enter</dt>
+          <dd>Fläche fertig</dd>
         </dl>
       </section>
     );
@@ -131,7 +239,7 @@ function ToolPanel({ editor, tool }: { editor: LiveryEditor; tool: ToolState }) 
   );
 }
 
-export function PropertiesPanel({ editor, selected, selectionCount, layers, tool, canCopyToOtherSide }: Props) {
+export function PropertiesPanel({ editor, selected, selectionCount, layers, tool, canCopyToOtherSide, canGroup }: Props) {
   if (tool) return <ToolPanel editor={editor} tool={tool} />;
 
   if (selectionCount > 1) {
@@ -140,10 +248,14 @@ export function PropertiesPanel({ editor, selected, selectionCount, layers, tool
         <h2 className="section-title">{selectionCount} Ebenen ausgewählt</h2>
         <p className="section-hint">Verschieben, drehen und skalieren geht gemeinsam auf der Fläche.</p>
         <div className="action-row">
+          <button type="button" className="btn btn-quiet" onClick={() => editor.groupSelected()} disabled={!canGroup}>
+            <Group size={15} aria-hidden /> Gruppieren
+          </button>
           <button type="button" className="btn btn-danger" onClick={() => editor.removeSelected()}>
             <Trash2 size={15} aria-hidden /> Löschen
           </button>
         </div>
+        {!canGroup && <p className="field-hint field-hint-wide">Gruppieren geht nur mit Ebenen im selben Bereich (Lack, Scheiben oder Frei).</p>}
       </section>
     );
   }
@@ -217,14 +329,22 @@ export function PropertiesPanel({ editor, selected, selectionCount, layers, tool
             </select>
           </Field>
           <SliderField label="Abstand" value={selected.charSpacing ?? 0} min={-100} max={800} step={10} onChange={(v) => update({ charSpacing: v })} />
+          <SliderField label="Biegung" value={selected.textArc ?? 0} min={-100} max={100} unit=" %" onChange={(textArc) => update({ textArc })} />
         </>
       )}
 
-      {(selected.kind === 'text' || selected.kind === 'shape') && (
+      {(selected.kind === 'text' || selected.kind === 'shape' || selected.kind === 'area') && (
         <>
-          <ColorField label="Farbe" value={selected.fill ?? '#ffffff'} onChange={(fill) => update({ fill })} />
+          <FillFields key={selected.id} selected={selected} update={update} />
           <ColorField label="Kontur" value={selected.stroke ?? '#1d1d1f'} onChange={(stroke) => update({ stroke })} />
           <SliderField label="Konturbreite" value={selected.strokeWidth ?? 0} min={0} max={40} onChange={(strokeWidth) => update({ strokeWidth })} />
+        </>
+      )}
+
+      {selected.kind === 'area' && (
+        <>
+          <CurveField smooth={selected.smooth ?? false} onChange={(smooth) => update({ smooth })} />
+          <p className="field-hint field-hint-wide">Ziehe die Ecken, um die Fläche zu formen.</p>
         </>
       )}
 
@@ -320,6 +440,12 @@ export function PropertiesPanel({ editor, selected, selectionCount, layers, tool
       {(selected.kind === 'logo' || selected.kind === 'image') && (
         <>
           <Switch
+            label="Weiß entfernen"
+            hint="Macht einen weißen Hintergrund durchsichtig"
+            checked={!!selected.removeWhite}
+            onChange={(removeWhite) => update({ removeWhite })}
+          />
+          <Switch
             label="Einfärben"
             hint="Färbt das ganze Motiv in einer Farbe"
             checked={!!selected.tint}
@@ -365,6 +491,11 @@ export function PropertiesPanel({ editor, selected, selectionCount, layers, tool
         </div>
       </Field>
 
+      {selected.kind === 'group' && (
+        <button type="button" className="btn btn-quiet btn-wide" onClick={() => editor.ungroupSelected()}>
+          <Ungroup size={15} aria-hidden /> Gruppe auflösen
+        </button>
+      )}
       {canCopyToOtherSide && (
         <button
           type="button"

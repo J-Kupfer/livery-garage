@@ -44,6 +44,7 @@ const SNAP_KEY = 'otl:snapping';
 const EMPTY_SNAPSHOT: EditorSnapshot = {
   layers: [],
   selection: [],
+  canGroup: false,
   snapping: true,
   guideOpacity: 0.6,
   zoom: 1,
@@ -529,6 +530,7 @@ export function EditorScreen({ client, index, onForgetPackage }: Props) {
               layers={snap.layers}
               tool={snap.tool}
               canCopyToOtherSide={snap.mirrorAxis !== undefined}
+              canGroup={snap.canGroup}
             />
           </>
         )}

@@ -6,11 +6,13 @@ import {
   EyeOff,
   Flag,
   Flame,
+  Group,
   Hash,
   Image,
   Lock,
   LockOpen,
   PanelTop,
+  PenTool,
   RectangleHorizontal,
   Shapes,
   Spline,
@@ -31,6 +33,8 @@ const KIND_ICON: Record<LayerKind, typeof Type> = {
   sticker: Hash,
   line: Spline,
   brush: Brush,
+  area: PenTool,
+  group: Group,
 };
 
 interface Props {
@@ -111,6 +115,9 @@ export function LayersPanel({ editor, layers, selection, disabled, onPickLogo, o
                 <Flame size={16} aria-hidden /> Flammen
               </button>
               <hr />
+              <button type="button" role="menuitem" onClick={() => pick(() => editor.startArea())}>
+                <PenTool size={16} aria-hidden /> Fläche zeichnen
+              </button>
               <button type="button" role="menuitem" onClick={() => pick(() => editor.startLine())}>
                 <Spline size={16} aria-hidden /> Zierlinie zeichnen
               </button>

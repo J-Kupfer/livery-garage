@@ -4,15 +4,16 @@
  * creates, and can never make the browser fetch anything from the network.
  */
 import type { AssetSource, DesignData } from '../editor/LiveryEditor.ts';
-import { ZONE_ORDER, type Look } from './composition.ts';
-import { sanitizeLine } from './lines.ts';
+import { ZONE_ORDER, type Look, type ZoneGradient } from './composition.ts';
+import { sanitizeFill } from './fills.ts';
+import { sanitizeArea, sanitizeLine } from './lines.ts';
 import { sanitizePattern } from './patterns.ts';
 import { sanitizeSticker } from './stickers.ts';
 import { sanitizeWeathering } from './weathering.ts';
 
 export const DESIGN_FILE_SUFFIX = '.livery.json';
 
-const OBJECT_TYPES = new Set(['image', 'itext', 'rect', 'ellipse', 'path', 'pinstripe', 'group']);
+const OBJECT_TYPES = new Set(['image', 'itext', 'rect', 'ellipse', 'path', 'pinstripe', 'area', 'group']);
 /** What a sticker group may contain: its badge shape and its text. */
 const STICKER_PARTS = new Set(['circle', 'rect', 'text']);
 /** Path commands as Fabric stores them (absolute), with their number of coordinates. */
@@ -25,6 +26,9 @@ const PATH_COMMANDS = new Map([
 ]);
 const MAX_PATH_COMMANDS = 20000;
 const MAX_BRUSH_STROKES = 2000;
+/** Groups may hold groups, but not without end. */
+const MAX_GROUP_DEPTH = 4;
+const MAX_GROUP_LAYERS = 200;
 const HEX = /^#[0-9a-f]{6}$/i;
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const index = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.trunc(v)) : 0);
@@ -41,6 +45,11 @@ function safePaint(v: unknown): boolean {
   );
 }
 
+function sanitizeZoneGradient(v: unknown): ZoneGradient | undefined {
+  if (!isRecord(v) || typeof v.from !== 'string' || typeof v.to !== 'string' || !HEX.test(v.from) || !HEX.test(v.to)) return undefined;
+  return { from: v.from.toLowerCase(), to: v.to.toLowerCase(), direction: v.direction === 'length' ? 'length' : 'height' };
+}
+
 function sanitizeLook(look: Record<string, unknown>): Look {
   const zones: Look['zones'] = {};
   const given = isRecord(look.zones) ? look.zones : {};
@@ -49,7 +58,8 @@ function sanitizeLook(look: Record<string, unknown>): Look {
     if (!isRecord(z)) continue;
     const color = typeof z.color === 'string' && HEX.test(z.color) ? z.color : undefined;
     const pattern = sanitizePattern(z.pattern);
-    zones[zone] = { variant: index(z.variant), ...(color && { color }), ...(pattern && { pattern }) };
+    const gradient = sanitizeZoneGradient(z.gradient);
+    zones[zone] = { variant: index(z.variant), ...(color && { color }), ...(pattern && { pattern }), ...(gradient && { gradient }) };
   }
   const weathering = sanitizeWeathering(look.weathering);
   return { zones, wheels: index(look.wheels), ...(weathering && { weathering }) };
@@ -78,6 +88,25 @@ function validLine(o: Record<string, unknown>): boolean {
   return true;
 }
 
+/** Only the editor's own image filters: removing white and recolouring. */
+function validImageFilters(o: Record<string, unknown>): boolean {
+  if (o.filters === undefined) return true;
+  if (!Array.isArray(o.filters)) return false;
+  o.filters = o.filters.filter(
+    (f) => isRecord(f) && (f.type === 'WhiteToAlpha' || (f.type === 'BlendColor' && typeof f.color === 'string' && HEX.test(f.color))),
+  );
+  return true;
+}
+
+/** A free area is rebuilt from its points as well. */
+function validArea(o: Record<string, unknown>): boolean {
+  const spec = sanitizeArea(o.areaSpec);
+  if (!spec || o.kind !== 'area') return false;
+  o.areaSpec = spec;
+  delete o.path;
+  return true;
+}
+
 /** A freehand layer is a group of plain stroked paths. */
 function validBrush(o: Record<string, unknown>): boolean {
   return (
@@ -101,6 +130,45 @@ function validAsset(v: unknown): v is AssetSource {
   if (v.kind === 'package') return typeof v.path === 'string';
   if (v.kind === 'upload') return typeof v.dataUrl === 'string' && /^data:image\/(png|jpeg|webp);base64,/.test(v.dataUrl);
   return false;
+}
+
+/**
+ * Checks one layer, and the layers inside a group, against what the editor itself
+ * creates, and cleans it up: no image sources, clip paths or stored text paths.
+ */
+function validObject(o: unknown, assets: Record<string, AssetSource>, depth: number): o is Record<string, unknown> {
+  if (!isRecord(o)) return false;
+  const type = String(o.type ?? '').toLowerCase();
+  if (!OBJECT_TYPES.has(type)) return false;
+  let valid: boolean;
+  if (type === 'image') valid = typeof o.assetId === 'string' && o.assetId in assets && validImageFilters(o);
+  else if (type === 'group') valid = o.kind === 'group' ? validGroup(o, assets, depth) : o.kind === 'brush' ? validBrush(o) : validSticker(o);
+  else if (type === 'pinstripe' && !validLine(o)) valid = false;
+  else if (type === 'area' && !validArea(o)) valid = false;
+  else if (type === 'path' && !validPath(o.path)) valid = false;
+  else valid = safePaint(o.fill) && safePaint(o.stroke);
+  if (!valid) return false;
+
+  delete o.src;
+  delete o.clipPath;
+  // Gradients and patterns are rebuilt from the spec; a broken one falls back to the plain colour.
+  const fill = sanitizeFill(o.fillSpec);
+  if (fill) o.fillSpec = fill;
+  else delete o.fillSpec;
+  // Bent text is rebuilt from its bend; a stored path is never needed.
+  if (type === 'itext') {
+    delete o.path;
+    if (typeof o.textArc === 'number' && Number.isFinite(o.textArc)) o.textArc = Math.max(-100, Math.min(100, o.textArc));
+    else delete o.textArc;
+  }
+  return true;
+}
+
+/** A group of layers: each of them is checked like a layer of its own. */
+function validGroup(o: Record<string, unknown>, assets: Record<string, AssetSource>, depth: number): boolean {
+  if (depth >= MAX_GROUP_DEPTH || !Array.isArray(o.objects) || o.objects.length > MAX_GROUP_LAYERS) return false;
+  o.objects = o.objects.filter((child) => validObject(child, assets, depth + 1));
+  return (o.objects as unknown[]).length > 0;
 }
 
 /** A design as saved to a file: the editor's design data plus the livery name. */
@@ -133,19 +201,7 @@ export function parseDesign(text: string, knownPackagePaths: ReadonlySet<string>
     assets[id] = asset;
   }
 
-  const objects = data.objects.filter(isRecord).filter((o) => {
-    const type = String(o.type ?? '').toLowerCase();
-    if (!OBJECT_TYPES.has(type)) return false;
-    if (type === 'image') return typeof o.assetId === 'string' && o.assetId in assets;
-    if (type === 'group') return o.kind === 'brush' ? validBrush(o) : validSticker(o);
-    if (type === 'pinstripe' && !validLine(o)) return false;
-    if (type === 'path' && !validPath(o.path)) return false;
-    return safePaint(o.fill) && safePaint(o.stroke);
-  });
-  for (const o of objects) {
-    delete o.src;
-    delete o.clipPath;
-  }
+  const objects = data.objects.filter((o) => validObject(o, assets, 0));
 
   if (!isRecord(data.look.zones) || typeof data.look.wheels !== 'number') throw new Error('Das Design ist unvollständig.');
   return {

@@ -1,16 +1,52 @@
 import { useRef } from 'react';
 import { Dices, Pipette } from 'lucide-react';
-import type { CarParts, Look, ZoneLook } from '../lib/composition.ts';
+import type { CarParts, Look, ZoneGradient, ZoneLook } from '../lib/composition.ts';
 import { PATTERN_PALETTES, defaultPattern, patternThumbnail, randomSeed, type PatternSpec } from '../lib/patterns.ts';
 import type { Weathering } from '../lib/weathering.ts';
 import type { PaintZone } from '../lib/templateLayers.ts';
-import { SliderField } from './controls.tsx';
+import { ColorField, Field, SliderField } from './controls.tsx';
 import { PatternControls } from './PatternControls.tsx';
 
 /** What the pattern chip shows before a pattern is chosen. */
 const PATTERN_HINT: PatternSpec = { kind: 'woodland', colors: [...PATTERN_PALETTES[0].colors], scale: 1, seed: 7 };
 
 const ZONE_LABEL: Record<PaintZone, string> = { body: 'Karosserie', second: 'Zweitfarbe', roof: 'Dach' };
+
+const DIRECTIONS: readonly { direction: ZoneGradient['direction']; label: string; from: string; to: string }[] = [
+  { direction: 'height', label: 'Hoch', from: 'Unten', to: 'Oben' },
+  { direction: 'length', label: 'Längs', from: 'Links', to: 'Rechts' },
+];
+
+function GradientControls({ gradient, onChange }: { gradient: ZoneGradient; onChange: (gradient: ZoneGradient) => void }) {
+  const current = DIRECTIONS.find((d) => d.direction === gradient.direction) ?? DIRECTIONS[0];
+  return (
+    <div className="pattern-box">
+      <Field label="Richtung">
+        <div className="segmented" role="radiogroup" aria-label="Richtung">
+          {DIRECTIONS.map(({ direction, label }) => (
+            <button
+              key={direction}
+              type="button"
+              role="radio"
+              aria-checked={gradient.direction === direction}
+              aria-pressed={gradient.direction === direction}
+              onClick={() => onChange({ ...gradient, direction })}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </Field>
+      <ColorField label={current.from} value={gradient.from} onChange={(from) => onChange({ ...gradient, from })} />
+      <ColorField label={current.to} value={gradient.to} onChange={(to) => onChange({ ...gradient, to })} />
+      <p className="section-hint gradient-hint">
+        {gradient.direction === 'height'
+          ? 'Von den Schwellern bis zur Dachmitte, auf beiden Seiten gleich.'
+          : 'Von einem Ende des Autos zum anderen, in der Vorlage von links nach rechts.'}
+      </p>
+    </div>
+  );
+}
 
 interface Props {
   parts?: CarParts;
@@ -25,13 +61,19 @@ interface Props {
 const NO_WEATHERING: Weathering = { rust: 0, scratches: 0, seed: 1 };
 
 export function PaintPanel({ parts, look, guideOpacity, onZone, onWheels, onWeathering, onGuide }: Props) {
-  // Switching a zone back to a pattern restores the last one instead of rolling a new one.
+  // Switching a zone back to a pattern or gradient restores the last one instead of starting over.
   const lastPattern = useRef<Partial<Record<PaintZone, PatternSpec>>>({});
+  const lastGradient = useRef<Partial<Record<PaintZone, ZoneGradient>>>({});
   if (!parts || !look) return <aside className="panel panel-left" />;
 
   const setPattern = (zone: PaintZone, variant: number, pattern: PatternSpec) => {
     lastPattern.current[zone] = pattern;
     onZone(zone, { variant, pattern });
+  };
+
+  const setGradient = (zone: PaintZone, variant: number, gradient: ZoneGradient) => {
+    lastGradient.current[zone] = gradient;
+    onZone(zone, { variant, gradient });
   };
 
   return (
@@ -41,6 +83,10 @@ export function PaintPanel({ parts, look, guideOpacity, onZone, onWheels, onWeat
         {parts.zones.map(({ zone, variants }) => {
           const zoneLook = look.zones[zone] ?? { variant: 0 };
           const current = variants[zoneLook.variant] ?? variants[0];
+          const gradient = !zoneLook.pattern ? zoneLook.gradient : undefined;
+          // Dark sills fading into the zone's colour.
+          const fallback: ZoneGradient = { from: '#151515', to: zoneLook.color ?? current.color, direction: 'height' };
+          const preview = gradient ?? fallback;
           return (
             <div className="paint-group" key={zone}>
               <h3 className="group-title">{ZONE_LABEL[zone]}</h3>
@@ -50,7 +96,7 @@ export function PaintPanel({ parts, look, guideOpacity, onZone, onWheels, onWeat
                     key={variant.name + i}
                     type="button"
                     role="radio"
-                    aria-checked={!zoneLook.color && !zoneLook.pattern && zoneLook.variant === i}
+                    aria-checked={!zoneLook.color && !zoneLook.pattern && !zoneLook.gradient && zoneLook.variant === i}
                     aria-label={`Werksfarbe ${i + 1}`}
                     title={`Werksfarbe ${i + 1} (${variant.color})`}
                     className="chip"
@@ -59,8 +105,8 @@ export function PaintPanel({ parts, look, guideOpacity, onZone, onWheels, onWeat
                   />
                 ))}
                 <label
-                  className={`chip chip-custom${zoneLook.color && !zoneLook.pattern ? ' is-active' : ''}`}
-                  style={zoneLook.color && !zoneLook.pattern ? ({ '--chip': zoneLook.color } as React.CSSProperties) : undefined}
+                  className={`chip chip-custom${zoneLook.color && !zoneLook.pattern && !gradient ? ' is-active' : ''}`}
+                  style={zoneLook.color && !zoneLook.pattern && !gradient ? ({ '--chip': zoneLook.color } as React.CSSProperties) : undefined}
                   title={zoneLook.color ? `Eigene Farbe (${zoneLook.color})` : 'Eigene Farbe wählen'}
                 >
                   <input
@@ -69,7 +115,7 @@ export function PaintPanel({ parts, look, guideOpacity, onZone, onWheels, onWeat
                     value={zoneLook.color ?? current.color}
                     onChange={(e) => onZone(zone, { variant: zoneLook.variant, color: e.target.value })}
                   />
-                  {!(zoneLook.color && !zoneLook.pattern) && <Pipette size={14} aria-hidden />}
+                  {!(zoneLook.color && !zoneLook.pattern && !gradient) && <Pipette size={14} aria-hidden />}
                 </label>
                 <button
                   type="button"
@@ -83,10 +129,23 @@ export function PaintPanel({ parts, look, guideOpacity, onZone, onWheels, onWeat
                     if (!zoneLook.pattern) setPattern(zone, zoneLook.variant, lastPattern.current[zone] ?? defaultPattern());
                   }}
                 />
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={!!gradient}
+                  aria-label={`${ZONE_LABEL[zone]}: Verlauf`}
+                  title="Verlauf"
+                  className="chip chip-gradient"
+                  style={{ '--chip-from': preview.from, '--chip-to': preview.to } as React.CSSProperties}
+                  onClick={() => {
+                    if (!gradient) setGradient(zone, zoneLook.variant, lastGradient.current[zone] ?? fallback);
+                  }}
+                />
               </div>
               {zoneLook.pattern && (
                 <PatternControls spec={zoneLook.pattern} onChange={(pattern) => setPattern(zone, zoneLook.variant, pattern)} />
               )}
+              {gradient && <GradientControls gradient={gradient} onChange={(next) => setGradient(zone, zoneLook.variant, next)} />}
             </div>
           );
         })}

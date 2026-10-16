@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_LINE_STYLE, MAX_LINE_POINTS, lineDashArray, linePath, sanitizeLine, type LinePoint } from '../src/lib/lines.ts';
+import { DEFAULT_LINE_STYLE, MAX_LINE_POINTS, lineDashArray, linePath, sanitizeArea, sanitizeLine, type LinePoint } from '../src/lib/lines.ts';
 
 const points: LinePoint[] = [
   [0, 0],
@@ -55,6 +55,29 @@ describe('linePath', () => {
     }
   });
 
+  it('closes areas back to the first point', () => {
+    const smooth = linePath(points, true, true);
+    // One curve per side, the last one back to the start.
+    expect(smooth.map((c) => c[0])).toEqual(['M', 'C', 'C', 'C', 'C', 'Z']);
+    expect(smooth.at(-2)!.slice(-2)).toEqual(points[0]);
+    expect(linePath(points, false, true).map((c) => c[0])).toEqual(['M', 'L', 'L', 'L', 'Z']);
+  });
+
+  it('curves a closed area smoothly through its first point', () => {
+    // In a closed curve the tangent at the first point uses the last point as well:
+    // the closing curve arrives along the line on which the first curve leaves.
+    const square: LinePoint[] = [
+      [0, 0],
+      [100, 0],
+      [100, 100],
+      [0, 100],
+    ];
+    const path = linePath(square, true, true) as number[][];
+    const [, , , c2x, c2y] = path[4] as unknown as [string, number, number, number, number, number, number];
+    const [, c1x, c1y] = path[1] as unknown as [string, number, number];
+    expect(Math.atan2(0 - c2y, 0 - c2x)).toBeCloseTo(Math.atan2(c1y - 0, c1x - 0));
+  });
+
   it('copes with points on the same spot', () => {
     const path = linePath(
       [
@@ -74,6 +97,15 @@ describe('lineDashArray', () => {
     expect(lineDashArray({ pattern: 'dashed', width: 10 })).toEqual([25, 30]);
     // Zero-length dashes with round caps are dots one width across.
     expect(lineDashArray({ pattern: 'dotted', width: 10 })).toEqual([0, 20]);
+  });
+});
+
+describe('sanitizeArea', () => {
+  it('needs three points and keeps the curve setting', () => {
+    expect(sanitizeArea({ points: points.slice(0, 3), smooth: true })).toEqual({ points: points.slice(0, 3), smooth: true });
+    expect(sanitizeArea({ points: points.slice(0, 3), smooth: 'yes' })!.smooth).toBe(false);
+    expect(sanitizeArea({ points: points.slice(0, 2) })).toBeUndefined();
+    expect(sanitizeArea('area')).toBeUndefined();
   });
 });
 

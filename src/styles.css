@@ -707,6 +707,22 @@ h3 {
   opacity: 1;
 }
 
+.chip-gradient {
+  background: linear-gradient(to top, var(--chip-from) 10px, var(--chip-to));
+}
+
+.chip-gradient[aria-checked='false'] {
+  opacity: 0.7;
+}
+
+.chip-gradient[aria-checked='false']:hover {
+  opacity: 1;
+}
+
+.gradient-hint {
+  margin: 0;
+}
+
 /* Pattern settings sit under the zone's chips, grouped like a paint shop order card. */
 .pattern-box {
   display: grid;
@@ -1029,8 +1045,9 @@ h3 {
   padding: 0 10px;
 }
 
-/* A wide action right above the row belongs to the same group. */
-.btn-wide + .action-row {
+/* Wide actions right above the row belong to the same group. */
+.btn-wide + .action-row,
+.btn-wide + .btn-wide {
   margin-top: 8px;
 }
 

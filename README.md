@@ -8,17 +8,24 @@ Du malst auf den offiziellen Vorlagen, legst Logos, Text und Formen darauf und b
 ## Was der Editor kann
 
 - Das offizielle Vorlagen-Paket (Zip mit 21 PSDs) direkt im Browser einlesen, ohne Photoshop.
-- Lack pro Zone wählen: Karosserie, Zweitfarbe oder Dach, mit den Werksfarben, einer eigenen Farbe oder einem Muster, dazu die Felgen-Varianten.
+- Lack pro Zone wählen: Karosserie, Zweitfarbe oder Dach, mit den Werksfarben, einer eigenen Farbe, einem Muster oder einem Verlauf, dazu die Felgen-Varianten.
+- Lack-Verläufe laufen von den Schwellern bis zur Dachmitte, auf beiden Fahrzeugseiten gleich, oder der Länge nach über das Auto.
 - Muster als Lack: Woodland, Digital-Tarn, Tigerstreifen, Flecktarn, Zebra und Leopard, mit Farbvorlagen oder eigenen Farben, einstellbarer Größe und „Neu würfeln“.
 - Gebrauchsspuren: Rost und Kratzer mit je einem Regler; Dreck und Staub macht das Spiel selbst.
 - Ebenen hinzufügen: Sponsor-Logos aus dem Paket, eigene Bilder, Text in acht Schriften, Streifen, Rechtecke, Kreise, Hot-Rod-Flammen mit Farbverlauf und Sticker (Startnummer rund oder als Schild, Sonnenblende, Zielflagge).
+- Freie Flächen zeichnen: Ecken anklicken, ein Klick auf die erste Ecke schließt die Form, eckig oder geschwungen.
+  Damit entsteht jede Form, von der Farbfläche entlang einer Karosserielinie bis zum Swoosh; die Ecken lassen sich danach verschieben.
 - Zierlinien zeichnen: Punkte anklicken, der Editor legt eine geschwungene oder eckige Linie hindurch, durchgehend, gestrichelt oder gepunktet und auf Wunsch mit Kontur.
   Die Punkte lassen sich danach auf der Fläche verschieben.
 - Freihand malen mit einstellbarer Glättung; alle Striche eines Durchgangs landen in einer Ebene, mit „Weiter malen“ kommen später neue dazu.
+- Formen, Flächen und Text lassen sich mit einer Farbe, einem Verlauf (auch ins Durchsichtige auslaufend) oder einem der Muster füllen.
+- Text lässt sich im Bogen biegen, etwa über oder unter einer Startnummer.
+- Bei Bildern entfernt „Weiß entfernen“ einen weißen Hintergrund ohne hellen Rand, „Einfärben“ färbt das Motiv in einer Farbe.
 - Jede Ebene hat einen Bereich: „Lack“ (unter Fenstern und Lichtern, auf den Lack zugeschnitten), „Scheiben“ (auf den Fensterscheiben, etwa als Sonnenblende) oder „Frei“.
 - Hilfslinien und Einrasten beim Verschieben: an Kanten und Mitten anderer Ebenen, an der Mittellinie des Autos und an der gespiegelten Stelle auf der anderen Fahrzeugseite.
   Mit gedrückter Strg-Taste schiebt man frei, der Magnet-Knopf neben dem Zoom schaltet das Einrasten ganz ab.
 - „Auf die andere Seite“ kopiert eine Ebene an die passende Stelle der anderen Fahrzeugseite: Text, Nummern und Logos bleiben lesbar, Flammen, Linien und Formen werden gespiegelt.
+- Mehrere Ebenen lassen sich gruppieren, verschieben und gemeinsam auf die andere Seite kopieren.
 - Rückgängig und Wiederholen, automatisches Speichern pro Auto, Designs als Datei mit Freunden teilen.
 - Export als fertiges Zip für mod.io.
 - Direkt in den Ordner `LocalLiveries` des Spiels schreiben, auf Wunsch live nach jeder Änderung.
@@ -101,7 +108,8 @@ Es zeigt, ob neue Autos oder umbenannte Ebenen dazugekommen sind.
 - `src/lib/patterns.ts` erzeugt die Tarnmuster aus Rauschen; ein Muster ist nur Art, Farben, Größe und Zufallswert, das Bild entsteht jedes Mal gleich neu.
 - `src/lib/flames.ts` erzeugt die Flammen-Umrisse aus einem Zufallswert.
 - `src/lib/weathering.ts` erzeugt Rost und Kratzer, `src/lib/stickers.ts` beschreibt die Sticker-Vorlagen.
-- `src/lib/lines.ts` legt die Zierlinien durch ihre Punkte (Catmull-Rom-Kurve), `src/editor/Pinstripe.ts` ist die Linien-Ebene mit Kontur und Punkt-Griffen.
+- `src/lib/lines.ts` legt Zierlinien und freie Flächen durch ihre Punkte (Catmull-Rom-Kurve), `src/editor/PointPath.ts` gibt ihnen die Punkt-Griffe, `src/editor/Pinstripe.ts` und `src/editor/Area.ts` sind die beiden Ebenen-Arten.
+- `src/lib/fills.ts` beschreibt Verläufe und Muster als Füllung, `src/editor/filters.ts` den Bildfilter „Weiß entfernen“.
 - `src/lib/brush.ts` glättet die Pinselstriche: die Pinselspitze hängt an einem kurzen Faden hinter dem Mauszeiger.
 - `src/lib/symmetry.ts` findet die Spiegelachse zwischen den beiden Fahrzeugseiten: In allen Vorlagen liegt eine Seite kopfüber über dem Dach, die andere darunter.
   `src/lib/snapping.ts` berechnet daraus und aus den anderen Ebenen das Einrasten.
