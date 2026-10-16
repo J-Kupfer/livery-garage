@@ -1,6 +1,7 @@
 /**
  * The livery canvas: the car template as fixed background and overlay, with the
- * user's layers (logos, images, text, shapes, flames) in between as Fabric objects.
+ * user's layers (logos, images, text, shapes, flames, lines, freehand) in between as
+ * Fabric objects.
  *
  * Fabric objects are the single source of truth for layers. React reads a derived,
  * immutable snapshot through subscribe/getSnapshot (useSyncExternalStore).
@@ -25,16 +26,19 @@ import {
   type TMat2D,
   type TPointerEventInfo,
 } from 'fabric';
+import { DEFAULT_BRUSH, pullTip, stringLength, strokePath, type BrushStyle } from '../lib/brush.ts';
 import { TemplateComposer, defaultLook, type CarParts, type Look, type ZoneLook } from '../lib/composition.ts';
 import { DEFAULT_FLAME_COLORS, FLAME_WIDTH, flamePath } from '../lib/flames.ts';
 import { fontWeightFor } from '../lib/fonts.ts';
+import { DEFAULT_LINE_STYLE, MAX_LINE_POINTS, lineStyleOf, type LinePoint, type LineSpec, type LineStyle } from '../lib/lines.ts';
 import { DEFAULT_STICKERS, checkeredFlagCanvas, type StickerSpec, type StickerStyle } from '../lib/stickers.ts';
 import type { Weathering } from '../lib/weathering.ts';
 import { randomSeed } from '../lib/random.ts';
 import type { PaintZone } from '../lib/templateLayers.ts';
 import { TEXTURE_SIZE, type CarTemplate } from '../lib/templateTypes.ts';
+import { Pinstripe } from './Pinstripe.ts';
 
-export type LayerKind = 'logo' | 'image' | 'text' | 'shape' | 'flames' | 'sticker';
+export type LayerKind = 'logo' | 'image' | 'text' | 'shape' | 'flames' | 'sticker' | 'line' | 'brush';
 
 /**
  * Where a layer sits: clipped to the paint (below windows and lights), clipped to the
@@ -86,12 +90,19 @@ export interface LayerProps {
   /** Base, middle and tip colour of a flame layer. */
   flameColors?: string[];
   sticker?: StickerSpec;
+  line?: LineStyle;
+  /** Colour of the strokes of a freehand layer. */
+  brushColor?: string;
 }
 
-export type LayerPatch = Partial<Omit<LayerProps, 'id' | 'kind' | 'tint' | 'sticker'>> & {
+export type LayerPatch = Partial<Omit<LayerProps, 'id' | 'kind' | 'tint' | 'sticker' | 'line'>> & {
   tint?: string | null;
   sticker?: Partial<StickerSpec>;
+  line?: Partial<LineStyle>;
 };
+
+/** The drawing tool in use: while it is active, clicks on the canvas draw instead of select. */
+export type ToolState = { kind: 'line'; points: number; style: LineStyle } | { kind: 'brush'; style: BrushStyle };
 
 export interface EditorSnapshot {
   carId?: string;
@@ -101,6 +112,7 @@ export interface EditorSnapshot {
   layers: LayerInfo[];
   selection: string[];
   selected?: LayerProps;
+  tool?: ToolState;
   guideOpacity: number;
   /** Screen pixels per texture pixel. */
   zoom: number;
@@ -125,13 +137,41 @@ interface Tags {
 type Tagged = FabricObject & Partial<Tags>;
 const tagged = (o: FabricObject) => o as Tagged;
 
+/** A pinstripe being drawn: the clicked points plus the point under the pointer. */
+interface LineTool {
+  kind: 'line';
+  points: Point[];
+  hover?: Point;
+  preview?: Pinstripe;
+}
+
+/** A freehand session: every stroke lands in the same layer. */
+interface BrushTool {
+  kind: 'brush';
+  layerId?: string;
+  pointer?: Point;
+  stroke?: { points: Point[]; tip: Point; path: Path };
+}
+
 const MAX_ZOOM = 16;
 const HISTORY_LIMIT = 100;
 const COMMIT_DELAY_MS = 300;
 const ACCENT = '#f2b632';
 const SHAPE_FILL = '#d9572b';
 
-FabricObject.customProperties = ['id', 'layerName', 'kind', 'clip', 'assetId', 'flameSeed', 'flameColors', 'stickerSpec'];
+FabricObject.customProperties = [
+  'id',
+  'layerName',
+  'kind',
+  'clip',
+  'assetId',
+  'flameSeed',
+  'flameColors',
+  'stickerSpec',
+  'lineSpec',
+  // Fabric does not serialize it by default, but it is how a layer is locked.
+  'selectable',
+];
 Object.assign(InteractiveFabricObject.ownDefaults, {
   transparentCorners: false,
   cornerStyle: 'circle',
@@ -205,6 +245,11 @@ export class LiveryEditor {
   private spaceDown = false;
   private panFrom?: { x: number; y: number };
 
+  private tool?: LineTool | BrushTool;
+  /** Style for the next line and brush stroke: whatever was used last. */
+  private lineStyle: LineStyle = { ...DEFAULT_LINE_STYLE };
+  private brushStyle: BrushStyle = { ...DEFAULT_BRUSH };
+
   private readonly host: HTMLElement;
   /** Loads the image behind a package asset when a saved design is restored. */
   private readonly resolveAsset: (source: AssetSource) => Promise<Blob>;
@@ -222,6 +267,8 @@ export class LiveryEditor {
       selectionColor: 'rgba(242, 182, 50, 0.12)',
       selectionBorderColor: ACCENT,
       selectionLineWidth: 1,
+      // Thin lines and brush strokes are hit per pixel; give the pointer some slack.
+      targetFindTolerance: 6,
     });
 
     const plane = (element: HTMLCanvasElement) =>
@@ -295,9 +342,15 @@ export class LiveryEditor {
         .reverse(),
       selection: active.map((o) => o.id!).filter(Boolean),
       selected: single ? this.propsOf(single) : undefined,
+      tool:
+        this.tool?.kind === 'line'
+          ? { kind: 'line', points: this.tool.points.length, style: this.lineStyle }
+          : this.tool?.kind === 'brush'
+            ? { kind: 'brush', style: this.brushStyle }
+            : undefined,
       guideOpacity: this.guideOpacity,
       zoom: this.canvas.getZoom(),
-      canUndo: this.past.length > 0,
+      canUndo: this.past.length > 0 || (this.tool?.kind === 'line' && this.tool.points.length > 0),
       canRedo: this.future.length > 0,
       revision: this.revision,
     };
@@ -331,6 +384,11 @@ export class LiveryEditor {
     }
     if (o.kind === 'flames') props.flameColors = o.flameColors ?? [...DEFAULT_FLAME_COLORS];
     if (o.kind === 'sticker' && o.stickerSpec) props.sticker = o.stickerSpec;
+    if (o instanceof Pinstripe) props.line = lineStyleOf(o.lineSpec);
+    if (o.kind === 'brush' && o instanceof Group) {
+      const stroke = o.getObjects()[0]?.stroke;
+      props.brushColor = typeof stroke === 'string' ? stroke : undefined;
+    }
     if (o instanceof IText) {
       props.text = o.text;
       props.fontFamily = o.fontFamily;
@@ -346,6 +404,7 @@ export class LiveryEditor {
   /** Shows a car and restores its design, or starts a blank one with the factory look. */
   loadCar(template: CarTemplate, design?: DesignData): Promise<void> {
     return this.enqueue(async () => {
+      this.cancelTool();
       this.flushCommit();
       this.template = template;
       this.parts = this.composer.setTemplate(template);
@@ -412,7 +471,7 @@ export class LiveryEditor {
     if (!this.look) return;
     this.composer.render(this.look, this.guideOpacity);
     // The paint mask may have changed shape (some cars have variants with different panels).
-    for (const o of this.userObjects()) if (o.clip !== 'none') o.set('dirty', true);
+    for (const o of [...this.userObjects(), ...this.toolObjects()]) if (o.clip !== 'none') o.set('dirty', true);
     this.canvas.requestRenderAll();
     this.changed();
   }
@@ -431,16 +490,24 @@ export class LiveryEditor {
     return this.canvas.width / this.canvas.getZoom();
   }
 
-  private place(o: Tagged, kind: LayerKind, name: string, clip: ClipMode = 'paint'): void {
-    const center = this.canvas.getVpCenter();
+  /** Turns an object into a layer: id, name, kind and clipping. */
+  private register(o: Tagged, kind: LayerKind, name: string, clip: ClipMode): void {
     Object.assign(o, {
       id: crypto.randomUUID(),
       layerName: name && this.nextName(name),
       kind,
       clip,
     } satisfies Tags);
-    o.set({ left: center.x, top: center.y });
     this.applyClip(o);
+    this.applyHitTesting(o);
+  }
+
+  /** Adds a new layer in the middle of the view and selects it. */
+  private place(o: Tagged, kind: LayerKind, name: string, clip: ClipMode = 'paint'): void {
+    this.endTool();
+    const center = this.canvas.getVpCenter();
+    this.register(o, kind, name, clip);
+    o.set({ left: center.x, top: center.y });
     this.canvas.add(o);
     this.normalizeStack();
     this.canvas.setActiveObject(o);
@@ -612,6 +679,7 @@ export class LiveryEditor {
   select(id: string): void {
     const o = this.find(id);
     if (!o || !o.selectable) return;
+    this.endTool();
     this.canvas.setActiveObject(o);
     this.canvas.requestRenderAll();
     this.emit();
@@ -670,11 +738,13 @@ export class LiveryEditor {
   }
 
   private applyOrder(bottomFirst: Tagged[]): void {
+    // Whatever is being drawn right now goes on top of its band.
+    const all = [...bottomFirst, ...this.toolObjects()];
     const desired = [
-      ...bottomFirst.filter((o) => o.clip !== 'windows'),
+      ...all.filter((o) => o.clip !== 'windows'),
       this.weatheringPlane,
       this.overlayPlane,
-      ...bottomFirst.filter((o) => o.clip === 'windows'),
+      ...all.filter((o) => o.clip === 'windows'),
     ];
     desired.forEach((o, index) => {
       if (this.canvas.getObjects()[index] !== o) this.canvas.moveObjectTo(o, index);
@@ -711,7 +781,7 @@ export class LiveryEditor {
     const active = this.canvas.getActiveObjects() as Tagged[];
     if (active.length !== 1) return;
     const o = active[0];
-    const { name, clip, tint, flameColors, sticker, ...rest } = patch;
+    const { name, clip, tint, flameColors, sticker, line, brushColor, ...rest } = patch;
     if (sticker && o.kind === 'sticker' && o.stickerSpec) {
       // Rebuilt as a whole: the badge size depends on text and font.
       this.swap(o, this.createSticker({ ...o.stickerSpec, ...sticker }));
@@ -726,6 +796,14 @@ export class LiveryEditor {
     if (flameColors && o.kind === 'flames') {
       o.flameColors = [...flameColors];
       o.set('fill', this.flameGradient(flameColors));
+    }
+    if (line && o instanceof Pinstripe) {
+      o.setSpec(line);
+      // The next line starts out the same, so a set of stripes stays consistent.
+      this.lineStyle = { ...this.lineStyle, ...line };
+    }
+    if (brushColor && o instanceof Group && tagged(o).kind === 'brush') {
+      for (const stroke of o.getObjects()) stroke.set('stroke', brushColor);
     }
     if (tint !== undefined && o instanceof FabricImage) {
       o.filters = tint ? [new filters.BlendColor({ color: tint, mode: 'tint', alpha: 1 })] : [];
@@ -759,9 +837,316 @@ export class LiveryEditor {
     o.set('dirty', true);
   }
 
+  /** Freehand layers are mostly empty space: only their strokes count as a hit. */
+  private applyHitTesting(o: Tagged): void {
+    if (o.kind === 'brush') o.perPixelTargetFind = true;
+  }
+
   private registerAsset(source: AssetSource, blob: Blob, id: string = crypto.randomUUID()): string {
     this.assets.set(id, { source, url: URL.createObjectURL(blob) });
     return id;
+  }
+
+  // ---- drawing tools ----------------------------------------------------------
+
+  /** Starts drawing a pinstripe: every click on the canvas adds a point. */
+  startLine(): void {
+    this.endTool();
+    this.canvas.discardActiveObject();
+    this.tool = { kind: 'line', points: [] };
+    this.updateInteraction();
+    this.canvas.requestRenderAll();
+    this.emit();
+  }
+
+  /** Starts freehand painting; with `continueSelected` the strokes go into the selected freehand layer. */
+  startBrush(continueSelected = false): void {
+    const active = this.canvas.getActiveObjects() as Tagged[];
+    const layerId = continueSelected && active.length === 1 && active[0].kind === 'brush' ? active[0].id : undefined;
+    this.endTool();
+    this.canvas.discardActiveObject();
+    this.tool = { kind: 'brush', layerId };
+    this.updateInteraction();
+    this.canvas.requestRenderAll();
+    this.emit();
+  }
+
+  /** Finishes the active tool and selects what it drew. A line needs at least two points. */
+  endTool(): void {
+    const tool = this.tool;
+    if (!tool) return;
+    let result: Tagged | undefined;
+    if (tool.kind === 'line') {
+      result = this.finishLine(tool);
+    } else {
+      this.finishStroke(tool);
+      result = tool.layerId ? this.find(tool.layerId) : undefined;
+    }
+    this.closeTool();
+    if (result) this.canvas.setActiveObject(result);
+    this.canvas.requestRenderAll();
+    this.emit();
+  }
+
+  /** Leaves the active tool; a line in progress is dropped. */
+  cancelTool(): void {
+    const tool = this.tool;
+    if (!tool) return;
+    if (tool.kind === 'line') {
+      const { preview } = tool;
+      if (preview) this.quietly(() => this.canvas.remove(preview));
+    } else {
+      this.finishStroke(tool);
+    }
+    this.closeTool();
+    this.canvas.requestRenderAll();
+    this.emit();
+  }
+
+  setLineStyle(patch: Partial<LineStyle>): void {
+    this.lineStyle = { ...this.lineStyle, ...patch };
+    if (this.tool?.kind === 'line') this.updateLinePreview(this.tool);
+    this.emit();
+  }
+
+  setBrushStyle(patch: Partial<BrushStyle>): void {
+    this.brushStyle = { ...this.brushStyle, ...patch };
+    if (this.tool) this.canvas.renderTop();
+    this.emit();
+  }
+
+  private closeTool(): void {
+    this.tool = undefined;
+    this.updateInteraction();
+    this.canvas.clearContext(this.canvas.contextTop);
+  }
+
+  /** What is being drawn right now and is not a layer yet. */
+  private toolObjects(): Tagged[] {
+    const tool = this.tool;
+    const o = tool?.kind === 'line' ? tool.preview : tool?.stroke?.path;
+    return o ? [o] : [];
+  }
+
+  private toolDown(e: MouseEvent, at: Point): void {
+    const tool = this.tool!;
+    if (tool.kind === 'line') this.addLinePoint(tool, at, e.shiftKey);
+    else this.startStroke(tool, at);
+  }
+
+  private toolMove(e: MouseEvent, at: Point): void {
+    const tool = this.tool!;
+    if (tool.kind === 'line') {
+      tool.hover = this.linePoint(tool, at, e.shiftKey);
+      this.updateLinePreview(tool);
+    } else {
+      this.continueStroke(tool, at);
+    }
+  }
+
+  /** The pointer left the canvas: no rubber band, no brush outline. */
+  private toolLeave(): void {
+    const tool = this.tool;
+    if (tool?.kind === 'line' && tool.hover) {
+      tool.hover = undefined;
+      this.updateLinePreview(tool);
+    } else if (tool?.kind === 'brush' && !tool.stroke) {
+      tool.pointer = undefined;
+      this.canvas.renderTop();
+    }
+  }
+
+  /** Whether two points are on the same spot on screen, like the two clicks of a double click. */
+  private samePlace(a: Point, b: Point): boolean {
+    return a.distanceFrom(b) * this.canvas.getZoom() < 4;
+  }
+
+  /** With Shift, a new segment snaps to 15° steps, like rotating. */
+  private linePoint(tool: LineTool, at: Point, shift: boolean): Point {
+    const last = tool.points.at(-1);
+    if (!shift || !last) return at;
+    const step = Math.PI / 12;
+    const angle = Math.round(Math.atan2(at.y - last.y, at.x - last.x) / step) * step;
+    const length = last.distanceFrom(at);
+    return new Point(last.x + Math.cos(angle) * length, last.y + Math.sin(angle) * length);
+  }
+
+  private addLinePoint(tool: LineTool, at: Point, shift: boolean): void {
+    const point = this.linePoint(tool, at, shift);
+    const last = tool.points.at(-1);
+    if ((last && this.samePlace(last, point)) || tool.points.length >= MAX_LINE_POINTS) return;
+    tool.points.push(point);
+    this.updateLinePreview(tool);
+    this.emit();
+  }
+
+  private removeLastPoint(): void {
+    const tool = this.tool;
+    if (tool?.kind !== 'line' || tool.points.length === 0) return;
+    tool.points.pop();
+    this.updateLinePreview(tool);
+    this.emit();
+  }
+
+  /** Shows the line as it will look, with the rubber band segment to the pointer. */
+  private updateLinePreview(tool: LineTool): void {
+    const points = [...tool.points];
+    const last = points.at(-1);
+    if (tool.hover && last && !this.samePlace(last, tool.hover)) points.push(tool.hover);
+    if (points.length < 2) {
+      const { preview } = tool;
+      if (preview) this.quietly(() => this.canvas.remove(preview));
+      tool.preview = undefined;
+    } else {
+      const spec: LineSpec = { ...this.lineStyle, points: points.map((p): LinePoint => [p.x, p.y]) };
+      if (tool.preview) {
+        tool.preview.setSpec(spec);
+      } else {
+        const preview = new Pinstripe(spec, { selectable: false, evented: false });
+        tagged(preview).clip = 'paint';
+        this.applyClip(preview);
+        tool.preview = preview;
+        this.quietly(() => this.canvas.insertAt(this.canvas.getObjects().indexOf(this.weatheringPlane), preview));
+      }
+    }
+    this.canvas.requestRenderAll();
+  }
+
+  private finishLine(tool: LineTool): Tagged | undefined {
+    const { preview } = tool;
+    if (!preview) return undefined;
+    if (tool.points.length < 2) {
+      this.quietly(() => this.canvas.remove(preview));
+      return undefined;
+    }
+    preview.setSpec({ points: tool.points.map((p): LinePoint => [p.x, p.y]) });
+    preview.set({ selectable: true, evented: true });
+    this.register(preview, 'line', 'Zierlinie', 'paint');
+    this.normalizeStack();
+    this.changed();
+    return preview;
+  }
+
+  private startStroke(tool: BrushTool, at: Point): void {
+    const layer = tool.layerId ? this.find(tool.layerId) : undefined;
+    const path: Tagged = new Path(strokePath([at]), {
+      fill: '',
+      stroke: this.brushStyle.color,
+      strokeWidth: this.brushStyle.width,
+      strokeLineCap: 'round',
+      strokeLineJoin: 'round',
+      selectable: false,
+      evented: false,
+    });
+    path.clip = layer?.clip ?? 'paint';
+    this.applyClip(path);
+    const objects = this.canvas.getObjects();
+    // Right above its layer: layers on top cover the stroke just as they will afterwards.
+    const index = layer ? objects.indexOf(layer) + 1 : objects.indexOf(this.weatheringPlane);
+    this.quietly(() => this.canvas.insertAt(index, path));
+    tool.pointer = at;
+    tool.stroke = { points: [at], tip: at, path: path as Path };
+    this.canvas.requestRenderAll();
+  }
+
+  private continueStroke(tool: BrushTool, at: Point): void {
+    tool.pointer = at;
+    const { stroke } = tool;
+    if (stroke) {
+      const zoom = this.canvas.getZoom();
+      const tip = pullTip(stroke.tip, at, stringLength(this.brushStyle.smoothing) / zoom);
+      stroke.tip = new Point(tip.x, tip.y);
+      // Points closer than two screen pixels add weight, not shape.
+      if (stroke.points.at(-1)!.distanceFrom(stroke.tip) * zoom >= 2) {
+        stroke.points.push(stroke.tip);
+        stroke.path._setPath(strokePath(stroke.points), true);
+        stroke.path.setCoords();
+        this.canvas.requestRenderAll();
+        return;
+      }
+    }
+    this.canvas.renderTop();
+  }
+
+  /** Moves the stroke into the session's layer; the first stroke creates the layer. */
+  private finishStroke(tool: BrushTool): void {
+    const { stroke } = tool;
+    if (!stroke) return;
+    tool.stroke = undefined;
+    const path: Tagged = stroke.path;
+    const index = this.canvas.getObjects().indexOf(path);
+    this.quietly(() => this.canvas.remove(path));
+    path.clipPath = undefined;
+    delete path.clip;
+    path.set({ selectable: true, evented: true });
+    const layer = tool.layerId ? this.find(tool.layerId) : undefined;
+    if (layer instanceof Group) {
+      layer.add(path);
+      layer.set('dirty', true);
+      layer.setCoords();
+      this.changed();
+    } else {
+      const group = new Group([path]);
+      this.register(group, 'brush', 'Freihand', 'paint');
+      this.canvas.insertAt(index, group);
+      this.normalizeStack();
+      tool.layerId = tagged(group).id;
+    }
+    this.canvas.requestRenderAll();
+  }
+
+  /** Point markers while drawing a line, the brush outline while painting; in screen pixels on the top canvas. */
+  private drawToolOverlay(ctx: CanvasRenderingContext2D): void {
+    const tool = this.tool;
+    if (!tool) return;
+    const { canvas } = this;
+    const vpt = canvas.viewportTransform;
+    const retina = canvas.getRetinaScaling();
+    const circle = (p: Point, radius: number, fill?: string) => {
+      const at = p.transform(vpt);
+      ctx.beginPath();
+      ctx.arc(at.x, at.y, radius, 0, Math.PI * 2);
+      if (fill) {
+        ctx.fillStyle = fill;
+        ctx.fill();
+      }
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(18, 22, 24, 0.6)';
+      ctx.stroke();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#ffffff';
+      ctx.stroke();
+    };
+    ctx.save();
+    ctx.setTransform(retina, 0, 0, retina, 0, 0);
+    if (tool.kind === 'line') {
+      for (const p of tool.points) circle(p, 4.5, '#ffffff');
+    } else if (tool.pointer) {
+      const { stroke, pointer } = tool;
+      if (stroke && stroke.tip.distanceFrom(pointer) > 0) {
+        // The stabiliser's string, from the brush tip to the pointer.
+        const a = stroke.tip.transform(vpt);
+        const b = pointer.transform(vpt);
+        ctx.beginPath();
+        ctx.moveTo(a.x, a.y);
+        ctx.lineTo(b.x, b.y);
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
+        ctx.stroke();
+      }
+      circle(stroke ? stroke.tip : pointer, Math.max(2, (this.brushStyle.width * canvas.getZoom()) / 2));
+    }
+    ctx.restore();
+  }
+
+  private quietly<T>(change: () => T): T {
+    const restoring = this.restoring;
+    this.restoring = true;
+    try {
+      return change();
+    } finally {
+      this.restoring = restoring;
+    }
   }
 
   // ---- serialization and history ---------------------------------------------
@@ -779,6 +1164,7 @@ export class LiveryEditor {
         const clip = o.clip as ClipMode | boolean | undefined;
         if (clip !== 'paint' && clip !== 'windows' && clip !== 'none') o.clip = clip === false ? 'none' : 'paint';
         this.applyClip(o);
+        this.applyHitTesting(o);
         if (!o.selectable) o.set({ evented: false });
       }
       return objects as Tagged[];
@@ -830,6 +1216,10 @@ export class LiveryEditor {
   }
 
   undo(): Promise<void> {
+    if (this.tool?.kind === 'line' && this.tool.points.length > 0) {
+      this.removeLastPoint();
+      return Promise.resolve();
+    }
     return this.enqueue(async () => {
       this.flushCommit();
       const previous = this.past.pop();
@@ -840,6 +1230,7 @@ export class LiveryEditor {
   }
 
   redo(): Promise<void> {
+    if (this.tool?.kind === 'line') this.endTool();
     return this.enqueue(async () => {
       this.flushCommit();
       const next = this.future.pop();
@@ -912,11 +1303,15 @@ export class LiveryEditor {
     }
     const { canvas } = this;
     const vpt = [...canvas.viewportTransform] as TMat2D;
+    // A line or stroke in progress is not part of the livery yet.
+    const drawing = this.toolObjects().filter((o) => o.visible);
+    for (const o of drawing) o.visible = false;
     canvas.overlayImage = undefined;
     canvas.viewportTransform = [1, 0, 0, 1, 0, 0];
     try {
       return canvas.toCanvasElement(1, { left: 0, top: 0, width: TEXTURE_SIZE, height: TEXTURE_SIZE });
     } finally {
+      for (const o of drawing) o.visible = true;
       this.showGuide();
       canvas.setViewportTransform(vpt);
     }
@@ -995,30 +1390,59 @@ export class LiveryEditor {
 
     canvas.on('mouse:down', (opt) => {
       const e = opt.e as MouseEvent;
-      if (!this.spaceDown && e.button !== 1) return;
-      this.panFrom = { x: e.clientX, y: e.clientY };
-      canvas.setCursor('grabbing');
+      if (this.spaceDown || e.button === 1) {
+        this.panFrom = { x: e.clientX, y: e.clientY };
+        canvas.setCursor('grabbing');
+      } else if (this.tool && e.button === 0) {
+        this.toolDown(e, opt.scenePoint);
+      }
     });
     canvas.on('mouse:move', (opt) => {
-      if (!this.panFrom) return;
       const e = opt.e as MouseEvent;
-      canvas.relativePan(new Point(e.clientX - this.panFrom.x, e.clientY - this.panFrom.y));
-      this.panFrom = { x: e.clientX, y: e.clientY };
+      if (this.panFrom) {
+        canvas.relativePan(new Point(e.clientX - this.panFrom.x, e.clientY - this.panFrom.y));
+        this.panFrom = { x: e.clientX, y: e.clientY };
+      } else if (this.tool) {
+        this.toolMove(e, opt.scenePoint);
+      }
     });
     canvas.on('mouse:up', () => {
-      if (!this.panFrom) return;
-      this.panFrom = undefined;
-      canvas.setCursor(this.spaceDown ? 'grab' : 'default');
-      this.emit();
+      if (this.panFrom) {
+        this.panFrom = undefined;
+        canvas.setCursor(canvas.defaultCursor);
+        this.emit();
+      } else if (this.tool?.kind === 'brush') {
+        this.finishStroke(this.tool);
+      }
+    });
+    canvas.on('mouse:dblclick', () => {
+      if (this.tool?.kind === 'line') this.endTool();
+    });
+    canvas.on('mouse:out', ({ target }) => {
+      if (!target) this.toolLeave();
+    });
+    canvas.on('after:render', ({ ctx }) => {
+      if (!this.tool) return;
+      // Every render of the visible canvas also refreshes the tool overlay on the top canvas,
+      // e.g. after zooming. Exports render into contexts of their own and are left alone.
+      if (ctx === canvas.contextTop) this.drawToolOverlay(ctx);
+      else if (ctx === canvas.getContext()) canvas.renderTop();
     });
   }
 
   private setPanMode(on: boolean): void {
     this.spaceDown = on;
-    this.canvas.skipTargetFind = on;
-    this.canvas.selection = !on;
-    this.canvas.defaultCursor = on ? 'grab' : 'default';
-    this.canvas.setCursor(this.canvas.defaultCursor);
+    this.updateInteraction();
+  }
+
+  /** What a click on the canvas does: select, pan or draw. */
+  private updateInteraction(): void {
+    const { canvas } = this;
+    const drawing = !!this.tool;
+    canvas.skipTargetFind = this.spaceDown || drawing;
+    canvas.selection = !this.spaceDown && !drawing;
+    canvas.defaultCursor = this.spaceDown ? 'grab' : drawing ? 'crosshair' : 'default';
+    canvas.setCursor(canvas.defaultCursor);
   }
 
   private onKeyDown = (e: KeyboardEvent): void => {
@@ -1027,6 +1451,17 @@ export class LiveryEditor {
     if (active instanceof IText && active.isEditing) return;
     const mod = e.metaKey || e.ctrlKey;
     const key = e.key.toLowerCase();
+
+    if (this.tool && !mod && (key === 'enter' || key === 'escape')) {
+      e.preventDefault();
+      this.endTool();
+      return;
+    }
+    if (this.tool?.kind === 'line' && !mod && (key === 'backspace' || key === 'delete')) {
+      e.preventDefault();
+      this.removeLastPoint();
+      return;
+    }
 
     if (e.code === 'Space') {
       e.preventDefault();

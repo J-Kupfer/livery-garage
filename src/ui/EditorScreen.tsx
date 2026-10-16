@@ -24,6 +24,7 @@ import { LogoPicker } from './LogoPicker.tsx';
 import { PaintPanel } from './PaintPanel.tsx';
 import { PropertiesPanel } from './PropertiesPanel.tsx';
 import { Toasts, useToasts } from './Toasts.tsx';
+import { ToolBar } from './ToolBar.tsx';
 import { useGameFolder } from './useGameFolder.ts';
 
 interface StoredDesign {
@@ -473,19 +474,23 @@ export function EditorScreen({ client, index, onForgetPackage }: Props) {
             <span>{vehicle.tag} wird geladen …</span>
           </div>
         )}
-        <div className="zoom-bar" role="group" aria-label="Zoom">
-          <button type="button" className="icon-btn" onClick={() => editor?.zoomBy(0.8)} aria-label="Verkleinern">
-            <Minus size={16} />
-          </button>
-          <button type="button" className="zoom-value" onClick={() => editor?.zoomTo(1)} title="Auf 100 % (1 Pixel der Textur pro Bildschirmpixel)">
-            {Math.round(snap.zoom * 100)} %
-          </button>
-          <button type="button" className="icon-btn" onClick={() => editor?.zoomBy(1.25)} aria-label="Vergrößern">
-            <Plus size={16} />
-          </button>
-          <button type="button" className="icon-btn" onClick={() => editor?.fit()} aria-label="Ganze Vorlage zeigen" title="Ganze Vorlage zeigen (Strg + 0)">
-            <Maximize2 size={15} />
-          </button>
+        {/* Floating bars in the strip below the texture that fit() keeps free. */}
+        <div className="workspace-bar">
+          {snap.tool && editor && <ToolBar tool={snap.tool} onDone={() => editor.endTool()} onCancel={() => editor.cancelTool()} />}
+          <div className="zoom-bar" role="group" aria-label="Zoom">
+            <button type="button" className="icon-btn" onClick={() => editor?.zoomBy(0.8)} aria-label="Verkleinern">
+              <Minus size={16} />
+            </button>
+            <button type="button" className="zoom-value" onClick={() => editor?.zoomTo(1)} title="Auf 100 % (1 Pixel der Textur pro Bildschirmpixel)">
+              {Math.round(snap.zoom * 100)} %
+            </button>
+            <button type="button" className="icon-btn" onClick={() => editor?.zoomBy(1.25)} aria-label="Vergrößern">
+              <Plus size={16} />
+            </button>
+            <button type="button" className="icon-btn" onClick={() => editor?.fit()} aria-label="Ganze Vorlage zeigen" title="Ganze Vorlage zeigen (Strg + 0)">
+              <Maximize2 size={15} />
+            </button>
+          </div>
         </div>
       </main>
 
@@ -500,7 +505,13 @@ export function EditorScreen({ client, index, onForgetPackage }: Props) {
               onPickLogo={() => setDialog('logo')}
               onUpload={(file) => void uploadImage(file)}
             />
-            <PropertiesPanel editor={editor} selected={snap.selected} selectionCount={snap.selection.length} layers={snap.layers} />
+            <PropertiesPanel
+              editor={editor}
+              selected={snap.selected}
+              selectionCount={snap.selection.length}
+              layers={snap.layers}
+              tool={snap.tool}
+            />
           </>
         )}
       </aside>

@@ -1,9 +1,37 @@
 import { Fragment, useEffect, useRef, useState } from 'react';
-import { Circle, Eye, EyeOff, Flag, Flame, Hash, Image, Lock, LockOpen, PanelTop, RectangleHorizontal, Shapes, Square, Sticker, Type, Upload } from 'lucide-react';
+import {
+  Brush,
+  Circle,
+  Eye,
+  EyeOff,
+  Flag,
+  Flame,
+  Hash,
+  Image,
+  Lock,
+  LockOpen,
+  PanelTop,
+  RectangleHorizontal,
+  Shapes,
+  Spline,
+  Square,
+  Sticker,
+  Type,
+  Upload,
+} from 'lucide-react';
 import type { LayerInfo, LayerKind, LiveryEditor } from '../editor/LiveryEditor.ts';
 import { DEFAULT_DECAL_FONT } from '../lib/fonts.ts';
 
-const KIND_ICON: Record<LayerKind, typeof Type> = { logo: Sticker, image: Image, text: Type, shape: Shapes, flames: Flame, sticker: Hash };
+const KIND_ICON: Record<LayerKind, typeof Type> = {
+  logo: Sticker,
+  image: Image,
+  text: Type,
+  shape: Shapes,
+  flames: Flame,
+  sticker: Hash,
+  line: Spline,
+  brush: Brush,
+};
 
 interface Props {
   editor: LiveryEditor;
@@ -81,6 +109,13 @@ export function LayersPanel({ editor, layers, selection, disabled, onPickLogo, o
               </button>
               <button type="button" role="menuitem" onClick={() => pick(() => editor.addFlames())}>
                 <Flame size={16} aria-hidden /> Flammen
+              </button>
+              <hr />
+              <button type="button" role="menuitem" onClick={() => pick(() => editor.startLine())}>
+                <Spline size={16} aria-hidden /> Zierlinie zeichnen
+              </button>
+              <button type="button" role="menuitem" onClick={() => pick(() => editor.startBrush())}>
+                <Brush size={16} aria-hidden /> Freihand malen
               </button>
             </div>
           )}

@@ -128,6 +128,61 @@ describe('parseDesign', () => {
     expect(parsed.design.objects.map((o) => o.id)).toEqual(['sticker']);
   });
 
+  it('accepts lines, rebuilt from their spec, and rejects lines without one', () => {
+    const lineSpec = { points: [[0, 0], [100, 20], [200, 0]], color: '#ffffff', width: 12, outline: '#000000', outlineWidth: 2, pattern: 'dotted', smooth: true };
+    const parsed = parseDesign(
+      JSON.stringify(
+        design({
+          objects: [
+            { type: 'Pinstripe', kind: 'line', lineSpec, path: [['M', 0, 0]], stroke: '#ffffff', id: 'line' },
+            { type: 'Pinstripe', kind: 'line', lineSpec: { points: [[0, 0]] }, id: 'one-point' },
+            { type: 'Pinstripe', kind: 'shape', lineSpec, id: 'wrong-kind' },
+            { type: 'Pinstripe', kind: 'line', lineSpec, stroke: { type: 'pattern', source: 'https://example.com/a.png' }, id: 'pattern' },
+          ],
+        }),
+      ),
+      known,
+    );
+    expect(parsed.design.objects.map((o) => o.id)).toEqual(['line']);
+    expect(parsed.design.objects[0]).not.toHaveProperty('path');
+    expect(parsed.design.objects[0].lineSpec).toEqual(lineSpec);
+  });
+
+  it('accepts freehand groups of plain strokes only', () => {
+    const stroke = { type: 'Path', path: [['M', 0, 0], ['Q', 5, 5, 10, 0], ['L', 20, 0]], stroke: '#151515', fill: '' };
+    const parsed = parseDesign(
+      JSON.stringify(
+        design({
+          objects: [
+            { type: 'Group', kind: 'brush', objects: [stroke, stroke], id: 'brush' },
+            { type: 'Group', kind: 'brush', objects: [stroke, { type: 'Image', src: 'https://example.com/a.png' }], id: 'image-inside' },
+            { type: 'Group', kind: 'brush', objects: [{ ...stroke, path: [['M', 0, 0], ['A', 1, 1, 0, 0, 1, 5, 5]] }], id: 'arc' },
+            { type: 'Group', kind: 'brush', objects: [{ ...stroke, path: [['L', 'x', 0]] }], id: 'garbage' },
+          ],
+        }),
+      ),
+      known,
+    );
+    expect(parsed.design.objects.map((o) => o.id)).toEqual(['brush']);
+  });
+
+  it('rejects paths with broken path data', () => {
+    const parsed = parseDesign(
+      JSON.stringify(
+        design({
+          objects: [
+            { type: 'Path', path: [['M', 0, 0], ['L', 10, 0], ['Z']], kind: 'flames', id: 'ok' },
+            { type: 'Path', path: [['M', 0]], kind: 'flames', id: 'short' },
+            { type: 'Path', path: 'M 0 0 L 10 10', kind: 'flames', id: 'string' },
+            { type: 'Path', path: [['__proto__', 1, 2]], kind: 'flames', id: 'proto' },
+          ],
+        }),
+      ),
+      known,
+    );
+    expect(parsed.design.objects.map((o) => o.id)).toEqual(['ok']);
+  });
+
   it('keeps weathering, clamped', () => {
     const parsed = parseDesign(JSON.stringify(design({ look: { zones: {}, wheels: 0, weathering: { rust: 3, scratches: 0.4, seed: 77 } } })), known);
     expect(parsed.design.look.weathering).toEqual({ rust: 1, scratches: 0.4, seed: 77 });

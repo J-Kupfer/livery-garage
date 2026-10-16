@@ -1007,6 +1007,10 @@ h3 {
   font-size: 12.5px;
 }
 
+.field-hint-wide {
+  margin-left: 0;
+}
+
 .btn-wide {
   width: 100%;
   margin-top: 14px;
@@ -1158,6 +1162,10 @@ h3 {
   color: var(--dim);
 }
 
+.shortcuts-spaced {
+  margin-top: 18px;
+}
+
 /* ---- workspace -------------------------------------------------------- */
 
 .workspace {
@@ -1187,10 +1195,31 @@ h3 {
   transform: translate(-50%, -50%);
 }
 
-.zoom-bar {
+/*
+ * The strip below the texture: the tool bar in the middle, the zoom bar on the right.
+ * The outer columns are equal, so the tool bar is centred while there is room and
+ * moves aside rather than covering the zoom bar when there is not.
+ */
+.workspace-bar {
   position: absolute;
   right: 14px;
   bottom: 14px;
+  left: 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr);
+  grid-template-areas: '. tool zoom';
+  align-items: center;
+  gap: 12px;
+  pointer-events: none;
+}
+
+.workspace-bar > * {
+  pointer-events: auto;
+}
+
+.zoom-bar {
+  grid-area: zoom;
+  justify-self: end;
   display: flex;
   align-items: center;
   gap: 2px;
@@ -1199,6 +1228,55 @@ h3 {
   border-radius: 9px;
   background: rgba(31, 40, 44, 0.92);
   backdrop-filter: blur(6px);
+}
+
+/* Shown while drawing a line or painting freehand. */
+.tool-bar {
+  grid-area: tool;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 4px 4px 4px 14px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(31, 40, 44, 0.94);
+  box-shadow: 0 10px 28px rgba(4, 8, 10, 0.4);
+  backdrop-filter: blur(6px);
+  white-space: nowrap;
+}
+
+.tool-bar-icon {
+  flex: none;
+  color: var(--amber);
+}
+
+.tool-bar-hint {
+  overflow: hidden;
+  margin-right: 4px;
+  color: var(--dust);
+  font-size: 13px;
+  text-overflow: ellipsis;
+}
+
+/* The panels have fixed widths, so the window width says how much room the strip has. */
+@media (max-width: 1380px) {
+  .tool-bar-hint {
+    display: none;
+  }
+}
+
+@media (max-width: 1130px) {
+  .workspace-bar {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'tool' 'zoom';
+    justify-items: end;
+  }
+}
+
+.tool-bar .btn {
+  height: 32px;
+  padding: 0 12px;
 }
 
 .zoom-value {

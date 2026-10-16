@@ -12,6 +12,9 @@ Du malst auf den offiziellen Vorlagen, legst Logos, Text und Formen darauf und b
 - Muster als Lack: Woodland, Digital-Tarn, Tigerstreifen, Flecktarn, Zebra und Leopard, mit Farbvorlagen oder eigenen Farben, einstellbarer Größe und „Neu würfeln“.
 - Gebrauchsspuren: Rost und Kratzer mit je einem Regler; Dreck und Staub macht das Spiel selbst.
 - Ebenen hinzufügen: Sponsor-Logos aus dem Paket, eigene Bilder, Text in acht Schriften, Streifen, Rechtecke, Kreise, Hot-Rod-Flammen mit Farbverlauf und Sticker (Startnummer rund oder als Schild, Sonnenblende, Zielflagge).
+- Zierlinien zeichnen: Punkte anklicken, der Editor legt eine geschwungene oder eckige Linie hindurch, durchgehend, gestrichelt oder gepunktet und auf Wunsch mit Kontur.
+  Die Punkte lassen sich danach auf der Fläche verschieben.
+- Freihand malen mit einstellbarer Glättung; alle Striche eines Durchgangs landen in einer Ebene, mit „Weiter malen“ kommen später neue dazu.
 - Jede Ebene hat einen Bereich: „Lack“ (unter Fenstern und Lichtern, auf den Lack zugeschnitten), „Scheiben“ (auf den Fensterscheiben, etwa als Sonnenblende) oder „Frei“.
 - Rückgängig und Wiederholen, automatisches Speichern pro Auto, Designs als Datei mit Freunden teilen.
 - Export als fertiges Zip für mod.io.
@@ -95,6 +98,8 @@ Es zeigt, ob neue Autos oder umbenannte Ebenen dazugekommen sind.
 - `src/lib/patterns.ts` erzeugt die Tarnmuster aus Rauschen; ein Muster ist nur Art, Farben, Größe und Zufallswert, das Bild entsteht jedes Mal gleich neu.
 - `src/lib/flames.ts` erzeugt die Flammen-Umrisse aus einem Zufallswert.
 - `src/lib/weathering.ts` erzeugt Rost und Kratzer, `src/lib/stickers.ts` beschreibt die Sticker-Vorlagen.
+- `src/lib/lines.ts` legt die Zierlinien durch ihre Punkte (Catmull-Rom-Kurve), `src/editor/Pinstripe.ts` ist die Linien-Ebene mit Kontur und Punkt-Griffen.
+- `src/lib/brush.ts` glättet die Pinselstriche: die Pinselspitze hängt an einem kurzen Faden hinter dem Mauszeiger.
 - `src/editor/LiveryEditor.ts` ist die Zeichenfläche (Fabric.js) mit Ebenen, Verlauf und Export-Rendering.
 - `src/lib/modExport.ts` schreibt Manifest, Zip und den `LocalLiveries`-Ordner.
 - `src/ui/` enthält die React-Oberfläche.

@@ -1,6 +1,8 @@
-import { Copy, Dices, FlipHorizontal2, FlipVertical2, Trash2 } from 'lucide-react';
-import type { ClipMode, LayerInfo, LayerProps, LiveryEditor } from '../editor/LiveryEditor.ts';
+import { Brush, Copy, Dices, FlipHorizontal2, FlipVertical2, Trash2 } from 'lucide-react';
+import type { ClipMode, LayerInfo, LayerProps, LiveryEditor, ToolState } from '../editor/LiveryEditor.ts';
+import { BRUSH_WIDTH_MAX, BRUSH_WIDTH_MIN } from '../lib/brush.ts';
 import { DECAL_FONTS, fontWeightFor } from '../lib/fonts.ts';
+import { LINE_OUTLINE_MAX, LINE_PATTERNS, LINE_WIDTH_MAX, LINE_WIDTH_MIN, lineDashArray, type LinePattern, type LineStyle } from '../lib/lines.ts';
 import { STICKER_STYLES } from '../lib/stickers.ts';
 import { ColorField, Field, SliderField, Switch } from './controls.tsx';
 
@@ -17,9 +19,119 @@ interface Props {
   selected?: LayerProps;
   selectionCount: number;
   layers: LayerInfo[];
+  tool?: ToolState;
 }
 
-export function PropertiesPanel({ editor, selected, selectionCount, layers }: Props) {
+/** A short sample of the line pattern, drawn the way the editor draws it. */
+function PatternSample({ pattern }: { pattern: LinePattern }) {
+  const dash = lineDashArray({ pattern, width: 3 });
+  return (
+    <svg width="38" height="8" viewBox="0 0 38 8" aria-hidden>
+      <line x1="3" y1="4" x2="35" y2="4" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeDasharray={dash?.join(' ')} />
+    </svg>
+  );
+}
+
+function LineFields({ style, onChange }: { style: LineStyle; onChange: (patch: Partial<LineStyle>) => void }) {
+  return (
+    <>
+      <ColorField label="Farbe" value={style.color} onChange={(color) => onChange({ color })} />
+      <SliderField label="Breite" value={style.width} min={LINE_WIDTH_MIN} max={LINE_WIDTH_MAX} onChange={(width) => onChange({ width })} />
+      <ColorField label="Kontur" value={style.outline} onChange={(outline) => onChange({ outline })} />
+      <SliderField
+        label="Konturbreite"
+        value={style.outlineWidth}
+        min={0}
+        max={LINE_OUTLINE_MAX}
+        onChange={(outlineWidth) => onChange({ outlineWidth })}
+      />
+      <Field label="Linie">
+        <div className="segmented" role="radiogroup" aria-label="Linie">
+          {LINE_PATTERNS.map(({ pattern, label }) => (
+            <button
+              key={pattern}
+              type="button"
+              role="radio"
+              aria-checked={style.pattern === pattern}
+              aria-pressed={style.pattern === pattern}
+              aria-label={label}
+              title={label}
+              onClick={() => onChange({ pattern })}
+            >
+              <PatternSample pattern={pattern} />
+            </button>
+          ))}
+        </div>
+      </Field>
+      <Field label="Verlauf">
+        <div className="segmented" role="radiogroup" aria-label="Verlauf">
+          <button type="button" role="radio" aria-checked={style.smooth} aria-pressed={style.smooth} onClick={() => onChange({ smooth: true })}>
+            Geschwungen
+          </button>
+          <button type="button" role="radio" aria-checked={!style.smooth} aria-pressed={!style.smooth} onClick={() => onChange({ smooth: false })}>
+            Eckig
+          </button>
+        </div>
+      </Field>
+    </>
+  );
+}
+
+/** Settings of the active drawing tool; they apply to what is drawn next. */
+function ToolPanel({ editor, tool }: { editor: LiveryEditor; tool: ToolState }) {
+  if (tool.kind === 'line') {
+    return (
+      <section className="panel-section props" aria-label="Zierlinie">
+        <h2 className="section-title">Zierlinie</h2>
+        <LineFields style={tool.style} onChange={(patch) => editor.setLineStyle(patch)} />
+        <dl className="shortcuts shortcuts-spaced">
+          <dt>Klick</dt>
+          <dd>Punkt setzen</dd>
+          <dt>Shift + Klick</dt>
+          <dd>In 15°-Schritten</dd>
+          <dt>Rücktaste</dt>
+          <dd>Letzten Punkt entfernen</dd>
+          <dt>Doppelklick, Enter</dt>
+          <dd>Linie fertig</dd>
+        </dl>
+      </section>
+    );
+  }
+  const { style } = tool;
+  return (
+    <section className="panel-section props" aria-label="Freihand">
+      <h2 className="section-title">Freihand</h2>
+      <ColorField label="Farbe" value={style.color} onChange={(color) => editor.setBrushStyle({ color })} />
+      <SliderField
+        label="Pinselgröße"
+        value={style.width}
+        min={BRUSH_WIDTH_MIN}
+        max={BRUSH_WIDTH_MAX}
+        onChange={(width) => editor.setBrushStyle({ width })}
+      />
+      <SliderField
+        label="Glättung"
+        value={style.smoothing * 100}
+        min={0}
+        max={100}
+        unit=" %"
+        onChange={(v) => editor.setBrushStyle({ smoothing: v / 100 })}
+      />
+      <dl className="shortcuts shortcuts-spaced">
+        <dt>Ziehen</dt>
+        <dd>Malen</dd>
+        <dt>Strg + Z</dt>
+        <dd>Letzten Strich zurücknehmen</dd>
+        <dt>Enter, Esc</dt>
+        <dd>Fertig</dd>
+      </dl>
+    </section>
+  );
+}
+
+export function PropertiesPanel({ editor, selected, selectionCount, layers, tool }: Props) {
+  if (tool) return <ToolPanel editor={editor} tool={tool} />;
+
   if (selectionCount > 1) {
     return (
       <section className="panel-section props" aria-label="Eigenschaften">
@@ -109,6 +221,22 @@ export function PropertiesPanel({ editor, selected, selectionCount, layers }: Pr
           <ColorField label="Farbe" value={selected.fill ?? '#ffffff'} onChange={(fill) => update({ fill })} />
           <ColorField label="Kontur" value={selected.stroke ?? '#1d1d1f'} onChange={(stroke) => update({ stroke })} />
           <SliderField label="Konturbreite" value={selected.strokeWidth ?? 0} min={0} max={40} onChange={(strokeWidth) => update({ strokeWidth })} />
+        </>
+      )}
+
+      {selected.kind === 'line' && selected.line && (
+        <>
+          <LineFields style={selected.line} onChange={(line) => update({ line })} />
+          <p className="field-hint field-hint-wide">Ziehe die Punkte, um die Linie zu formen.</p>
+        </>
+      )}
+
+      {selected.kind === 'brush' && (
+        <>
+          <ColorField label="Farbe" value={selected.brushColor ?? '#151515'} onChange={(brushColor) => update({ brushColor })} />
+          <button type="button" className="btn btn-quiet btn-wide" onClick={() => editor.startBrush(true)}>
+            <Brush size={16} aria-hidden /> Weiter malen
+          </button>
         </>
       )}
 

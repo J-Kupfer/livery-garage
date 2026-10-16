@@ -5,15 +5,26 @@
  */
 import type { AssetSource, DesignData } from '../editor/LiveryEditor.ts';
 import { ZONE_ORDER, type Look } from './composition.ts';
+import { sanitizeLine } from './lines.ts';
 import { sanitizePattern } from './patterns.ts';
 import { sanitizeSticker } from './stickers.ts';
 import { sanitizeWeathering } from './weathering.ts';
 
 export const DESIGN_FILE_SUFFIX = '.livery.json';
 
-const OBJECT_TYPES = new Set(['image', 'itext', 'rect', 'ellipse', 'path', 'group']);
+const OBJECT_TYPES = new Set(['image', 'itext', 'rect', 'ellipse', 'path', 'pinstripe', 'group']);
 /** What a sticker group may contain: its badge shape and its text. */
 const STICKER_PARTS = new Set(['circle', 'rect', 'text']);
+/** Path commands as Fabric stores them (absolute), with their number of coordinates. */
+const PATH_COMMANDS = new Map([
+  ['M', 2],
+  ['L', 2],
+  ['Q', 4],
+  ['C', 6],
+  ['Z', 0],
+]);
+const MAX_PATH_COMMANDS = 20000;
+const MAX_BRUSH_STROKES = 2000;
 const HEX = /^#[0-9a-f]{6}$/i;
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const index = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.trunc(v)) : 0);
@@ -42,6 +53,40 @@ function sanitizeLook(look: Record<string, unknown>): Look {
   }
   const weathering = sanitizeWeathering(look.weathering);
   return { zones, wheels: index(look.wheels), ...(weathering && { weathering }) };
+}
+
+function validPath(path: unknown): boolean {
+  return (
+    Array.isArray(path) &&
+    path.length > 0 &&
+    path.length <= MAX_PATH_COMMANDS &&
+    path.every(
+      (command) =>
+        Array.isArray(command) &&
+        PATH_COMMANDS.get(command[0]) === command.length - 1 &&
+        command.slice(1).every((n) => typeof n === 'number' && Number.isFinite(n)),
+    )
+  );
+}
+
+/** A line is rebuilt from its points and style; the stored path is not needed. */
+function validLine(o: Record<string, unknown>): boolean {
+  const spec = sanitizeLine(o.lineSpec);
+  if (!spec || o.kind !== 'line') return false;
+  o.lineSpec = spec;
+  delete o.path;
+  return true;
+}
+
+/** A freehand layer is a group of plain stroked paths. */
+function validBrush(o: Record<string, unknown>): boolean {
+  return (
+    Array.isArray(o.objects) &&
+    o.objects.length <= MAX_BRUSH_STROKES &&
+    o.objects.every(
+      (stroke) => isRecord(stroke) && String(stroke.type).toLowerCase() === 'path' && validPath(stroke.path) && safePaint(stroke.fill) && safePaint(stroke.stroke),
+    )
+  );
 }
 
 function validSticker(o: Record<string, unknown>): boolean {
@@ -92,7 +137,9 @@ export function parseDesign(text: string, knownPackagePaths: ReadonlySet<string>
     const type = String(o.type ?? '').toLowerCase();
     if (!OBJECT_TYPES.has(type)) return false;
     if (type === 'image') return typeof o.assetId === 'string' && o.assetId in assets;
-    if (type === 'group') return validSticker(o);
+    if (type === 'group') return o.kind === 'brush' ? validBrush(o) : validSticker(o);
+    if (type === 'pinstripe' && !validLine(o)) return false;
+    if (type === 'path' && !validPath(o.path)) return false;
     return safePaint(o.fill) && safePaint(o.stroke);
   });
   for (const o of objects) {
