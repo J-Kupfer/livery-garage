@@ -1029,6 +1029,11 @@ h3 {
   padding: 0 10px;
 }
 
+/* A wide action right above the row belongs to the same group. */
+.btn-wide + .action-row {
+  margin-top: 8px;
+}
+
 /* ---- layers ----------------------------------------------------------- */
 
 .add-bar {
@@ -1277,6 +1282,13 @@ h3 {
 .tool-bar .btn {
   height: 32px;
   padding: 0 12px;
+}
+
+.zoom-bar-divider {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background: var(--line);
 }
 
 .zoom-value {

@@ -143,6 +143,19 @@ export class TemplateComposer {
     ctx.globalCompositeOperation = 'source-over';
   }
 
+  /** The visible paint as a size × size grid of 0 and 1, e.g. to look for the mirror axis. */
+  samplePaintMask(size: number): Uint8Array {
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true })!;
+    ctx.drawImage(this.paintMask, 0, 0, size, size);
+    const { data } = ctx.getImageData(0, 0, size, size);
+    const mask = new Uint8Array(size * size);
+    for (let i = 0; i < mask.length; i++) mask[i] = data[i * 4 + 3] > 127 ? 1 : 0;
+    return mask;
+  }
+
   /** Redraws only the UV wireframe, e.g. when its opacity changes. */
   renderGuide(opacity: number): void {
     const ctx = context(this.guide);

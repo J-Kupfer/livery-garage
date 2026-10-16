@@ -7,6 +7,7 @@
  * immutable snapshot through subscribe/getSnapshot (useSyncExternalStore).
  */
 import {
+  ActiveSelection,
   Canvas,
   Circle,
   Ellipse,
@@ -24,6 +25,7 @@ import {
   filters,
   util,
   type TMat2D,
+  type TPointerEvent,
   type TPointerEventInfo,
 } from 'fabric';
 import { DEFAULT_BRUSH, pullTip, stringLength, strokePath, type BrushStyle } from '../lib/brush.ts';
@@ -31,9 +33,11 @@ import { TemplateComposer, defaultLook, type CarParts, type Look, type ZoneLook 
 import { DEFAULT_FLAME_COLORS, FLAME_WIDTH, flamePath } from '../lib/flames.ts';
 import { fontWeightFor } from '../lib/fonts.ts';
 import { DEFAULT_LINE_STYLE, MAX_LINE_POINTS, lineStyleOf, type LinePoint, type LineSpec, type LineStyle } from '../lib/lines.ts';
+import { snapBox, type Guide } from '../lib/snapping.ts';
 import { DEFAULT_STICKERS, checkeredFlagCanvas, type StickerSpec, type StickerStyle } from '../lib/stickers.ts';
 import type { Weathering } from '../lib/weathering.ts';
 import { randomSeed } from '../lib/random.ts';
+import { findMirrorAxis, otherSide } from '../lib/symmetry.ts';
 import type { PaintZone } from '../lib/templateLayers.ts';
 import { TEXTURE_SIZE, type CarTemplate } from '../lib/templateTypes.ts';
 import { Pinstripe } from './Pinstripe.ts';
@@ -113,6 +117,10 @@ export interface EditorSnapshot {
   selection: string[];
   selected?: LayerProps;
   tool?: ToolState;
+  /** Texture y of the car's centre line between its two mirrored sides, if found. */
+  mirrorAxis?: number;
+  /** Whether moved layers snap to other layers and the centre line. */
+  snapping: boolean;
   guideOpacity: number;
   /** Screen pixels per texture pixel. */
   zoom: number;
@@ -158,6 +166,11 @@ const HISTORY_LIMIT = 100;
 const COMMIT_DELAY_MS = 300;
 const ACCENT = '#f2b632';
 const SHAPE_FILL = '#d9572b';
+/** Snapping distance in screen pixels. */
+const SNAP_DISTANCE = 6;
+const GUIDE_COLORS = { align: '#ff4fa3', mirror: '#38c8f5', axis: '#38c8f5' } as const;
+/** Kinds whose counterpart on the other side must stay readable; the rest is mirrored. */
+const READABLE = new Set<LayerKind>(['text', 'sticker', 'logo', 'image']);
 
 FabricObject.customProperties = [
   'id',
@@ -246,6 +259,10 @@ export class LiveryEditor {
   private panFrom?: { x: number; y: number };
 
   private tool?: LineTool | BrushTool;
+  private mirrorAxis?: number;
+  private snapping = true;
+  /** Lines shown while a moved layer has snapped. */
+  private guides: Guide[] = [];
   /** Style for the next line and brush stroke: whatever was used last. */
   private lineStyle: LineStyle = { ...DEFAULT_LINE_STYLE };
   private brushStyle: BrushStyle = { ...DEFAULT_BRUSH };
@@ -348,6 +365,8 @@ export class LiveryEditor {
           : this.tool?.kind === 'brush'
             ? { kind: 'brush', style: this.brushStyle }
             : undefined,
+      mirrorAxis: this.mirrorAxis,
+      snapping: this.snapping,
       guideOpacity: this.guideOpacity,
       zoom: this.canvas.getZoom(),
       canUndo: this.past.length > 0 || (this.tool?.kind === 'line' && this.tool.points.length > 0),
@@ -411,6 +430,7 @@ export class LiveryEditor {
       this.look = design?.look ?? defaultLook(this.parts);
       this.cancelLook();
       this.composer.render(this.look, this.guideOpacity);
+      this.mirrorAxis = findMirrorAxis((size) => this.composer.samplePaintMask(size), TEXTURE_SIZE)?.y;
       this.canvas.backgroundImage = this.backgroundImage;
       this.showGuide();
       await this.replaceObjects(design ? await this.objectsFromDesign(design) : []);
@@ -438,6 +458,11 @@ export class LiveryEditor {
     if (!this.look) return;
     this.look = { ...this.look, wheels: variant };
     this.scheduleLook();
+  }
+
+  setSnapping(on: boolean): void {
+    this.snapping = on;
+    this.emit();
   }
 
   setGuideOpacity(opacity: number): void {
@@ -702,14 +727,36 @@ export class LiveryEditor {
   }
 
   duplicateSelected(): Promise<void> {
+    return this.copySelected((copy) => copy.set({ left: copy.left + 24, top: copy.top + 24 }));
+  }
+
+  /**
+   * Copies the selected layer to the matching spot on the other side of the car:
+   * text, numbers and logos stay readable, everything else is mirrored.
+   */
+  copyToOtherSide(): Promise<void> {
+    const axis = this.mirrorAxis;
+    if (axis === undefined) return Promise.resolve();
+    return this.copySelected((copy, original) => {
+      const center = original.getCenterPoint();
+      const target = otherSide({ x: center.x, y: center.y, angle: original.angle, flipY: original.flipY }, axis, READABLE.has(original.kind ?? 'shape'));
+      copy.set({ angle: target.angle, flipY: target.flipY });
+      copy.setPositionByOrigin(new Point(target.x, target.y), 'center', 'center');
+    });
+  }
+
+  /** Adds a copy of the selected layer right above it and selects the copy. */
+  private copySelected(arrange: (copy: Tagged, original: Tagged) => void): Promise<void> {
     const active = this.canvas.getActiveObjects() as Tagged[];
     if (active.length !== 1) return Promise.resolve();
+    const original = active[0];
     return this.enqueue(async () => {
-      const [copy] = await this.restoreObjects([this.serialize(active[0])]);
+      const [copy] = await this.restoreObjects([this.serialize(original)]);
       copy.id = crypto.randomUUID();
-      if (active[0].layerName) copy.layerName = this.nextName(active[0].layerName);
-      copy.set({ left: copy.left + 24, top: copy.top + 24 });
-      const index = this.canvas.getObjects().indexOf(active[0]);
+      if (original.layerName) copy.layerName = this.nextName(original.layerName);
+      arrange(copy, original);
+      copy.setCoords();
+      const index = this.canvas.getObjects().indexOf(original);
       this.canvas.insertAt(index + 1, copy);
       this.normalizeStack();
       this.canvas.setActiveObject(copy);
@@ -1374,6 +1421,7 @@ export class LiveryEditor {
     canvas.on('object:rotating', ({ target, e }) => {
       if ((e as MouseEvent).shiftKey) target.set('angle', Math.round(target.angle / 15) * 15);
     });
+    canvas.on('object:moving', ({ target, e }) => this.snapMoving(target, e));
 
     canvas.on('mouse:wheel', (opt: TPointerEventInfo<WheelEvent>) => {
       const e = opt.e;
@@ -1407,6 +1455,10 @@ export class LiveryEditor {
       }
     });
     canvas.on('mouse:up', () => {
+      if (this.guides.length) {
+        this.guides = [];
+        canvas.requestRenderAll();
+      }
       if (this.panFrom) {
         this.panFrom = undefined;
         canvas.setCursor(canvas.defaultCursor);
@@ -1422,12 +1474,64 @@ export class LiveryEditor {
       if (!target) this.toolLeave();
     });
     canvas.on('after:render', ({ ctx }) => {
-      if (!this.tool) return;
-      // Every render of the visible canvas also refreshes the tool overlay on the top canvas,
-      // e.g. after zooming. Exports render into contexts of their own and are left alone.
-      if (ctx === canvas.contextTop) this.drawToolOverlay(ctx);
-      else if (ctx === canvas.getContext()) canvas.renderTop();
+      // Exports render into contexts of their own and are left alone.
+      if (ctx === canvas.contextTop) {
+        if (this.tool) this.drawToolOverlay(ctx);
+      } else if (ctx === canvas.getContext()) {
+        this.drawGuides(ctx);
+        // Every render of the visible canvas also refreshes the tool overlay, e.g. after zooming.
+        if (this.tool) canvas.renderTop();
+      }
     });
+  }
+
+  /** Snaps a layer being dragged to other layers, their mirror images and the centre line. */
+  private snapMoving(target: FabricObject, e: TPointerEvent): void {
+    this.guides = [];
+    // Holding Ctrl moves freely.
+    if (!this.snapping || e.ctrlKey || e.metaKey) return;
+    const moving = new Set<FabricObject>(target instanceof ActiveSelection ? target.getObjects() : [target]);
+    const others = this.userObjects()
+      .filter((o) => o.visible && !moving.has(o))
+      .map((o) => o.getBoundingRect());
+    target.setCoords();
+    const snap = snapBox(target.getBoundingRect(), others, {
+      axis: this.mirrorAxis,
+      tolerance: SNAP_DISTANCE / this.canvas.getZoom(),
+      width: TEXTURE_SIZE,
+    });
+    if (snap.dx || snap.dy) {
+      target.set({ left: target.left + snap.dx, top: target.top + snap.dy });
+      target.setCoords();
+    }
+    this.guides = snap.guides;
+  }
+
+  /** Snap guides as thin screen-pixel lines with a dark halo, above everything else. */
+  private drawGuides(ctx: CanvasRenderingContext2D): void {
+    if (this.guides.length === 0) return;
+    const vpt = this.canvas.viewportTransform;
+    const retina = this.canvas.getRetinaScaling();
+    // A one pixel line is crisp when it runs through pixel centres.
+    const crisp = (v: number) => Math.round(v * retina) / retina + (retina % 2 === 1 ? 0.5 / retina : 0);
+    ctx.save();
+    ctx.setTransform(retina, 0, 0, retina, 0, 0);
+    for (const guide of this.guides) {
+      const a = new Point(guide.x1, guide.y1).transform(vpt);
+      const b = new Point(guide.x2, guide.y2).transform(vpt);
+      const horizontal = guide.y1 === guide.y2;
+      ctx.beginPath();
+      ctx.moveTo(horizontal ? a.x : crisp(a.x), horizontal ? crisp(a.y) : a.y);
+      ctx.lineTo(horizontal ? b.x : crisp(b.x), horizontal ? crisp(b.y) : b.y);
+      ctx.setLineDash(guide.kind === 'axis' ? [6, 4] : []);
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(18, 22, 24, 0.5)';
+      ctx.stroke();
+      ctx.lineWidth = 1;
+      ctx.strokeStyle = GUIDE_COLORS[guide.kind];
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   private setPanMode(on: boolean): void {

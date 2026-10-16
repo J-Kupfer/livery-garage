@@ -1,4 +1,4 @@
-import { Brush, Copy, Dices, FlipHorizontal2, FlipVertical2, Trash2 } from 'lucide-react';
+import { ArrowDownUp, Brush, Copy, Dices, FlipHorizontal2, FlipVertical2, Trash2 } from 'lucide-react';
 import type { ClipMode, LayerInfo, LayerProps, LiveryEditor, ToolState } from '../editor/LiveryEditor.ts';
 import { BRUSH_WIDTH_MAX, BRUSH_WIDTH_MIN } from '../lib/brush.ts';
 import { DECAL_FONTS, fontWeightFor } from '../lib/fonts.ts';
@@ -20,6 +20,8 @@ interface Props {
   selectionCount: number;
   layers: LayerInfo[];
   tool?: ToolState;
+  /** The car has two mirrored sides, so a layer can be copied across. */
+  canCopyToOtherSide: boolean;
 }
 
 /** A short sample of the line pattern, drawn the way the editor draws it. */
@@ -129,7 +131,7 @@ function ToolPanel({ editor, tool }: { editor: LiveryEditor; tool: ToolState }) 
   );
 }
 
-export function PropertiesPanel({ editor, selected, selectionCount, layers, tool }: Props) {
+export function PropertiesPanel({ editor, selected, selectionCount, layers, tool, canCopyToOtherSide }: Props) {
   if (tool) return <ToolPanel editor={editor} tool={tool} />;
 
   if (selectionCount > 1) {
@@ -160,6 +162,8 @@ export function PropertiesPanel({ editor, selected, selectionCount, layers, tool
           <dd>Ganze Vorlage zeigen</dd>
           <dt>Shift beim Drehen</dt>
           <dd>In 15°-Schritten</dd>
+          <dt>Strg beim Ziehen</dt>
+          <dd>Ohne Einrasten</dd>
           <dt>Strg + D</dt>
           <dd>Duplizieren</dd>
           <dt>Strg + Z</dt>
@@ -361,6 +365,16 @@ export function PropertiesPanel({ editor, selected, selectionCount, layers, tool
         </div>
       </Field>
 
+      {canCopyToOtherSide && (
+        <button
+          type="button"
+          className="btn btn-quiet btn-wide"
+          title="Kopie an der passenden Stelle auf der anderen Fahrzeugseite. Text, Nummern und Logos bleiben lesbar, alles andere wird gespiegelt."
+          onClick={() => void editor.copyToOtherSide()}
+        >
+          <ArrowDownUp size={15} aria-hidden /> Auf die andere Seite
+        </button>
+      )}
       <div className="action-row">
         <button type="button" className="btn btn-quiet" onClick={() => void editor.duplicateSelected()}>
           <Copy size={15} aria-hidden /> Duplizieren

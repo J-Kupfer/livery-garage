@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
-import { Download, Maximize2, Minus, Plus, Redo2, Send, Settings, Undo2 } from 'lucide-react';
+import { Download, Magnet, Maximize2, Minus, Plus, Redo2, Send, Settings, Undo2 } from 'lucide-react';
 import { LiveryEditor, type AssetSource, type DesignData, type EditorSnapshot } from '../editor/LiveryEditor.ts';
 import { DESIGN_FILE_SUFFIX, parseDesign, serializeDesign } from '../lib/designFile.ts';
 import { prepareUpload } from '../lib/images.ts';
@@ -39,10 +39,12 @@ const TEMPLATE_CACHE_SIZE = 3;
 const LAST_CAR_KEY = 'otl:lastCar';
 const LIVE_SYNC_KEY = 'otl:liveSync';
 const GUIDE_KEY = 'otl:guideOpacity';
+const SNAP_KEY = 'otl:snapping';
 
 const EMPTY_SNAPSHOT: EditorSnapshot = {
   layers: [],
   selection: [],
+  snapping: true,
   guideOpacity: 0.6,
   zoom: 1,
   canUndo: false,
@@ -115,6 +117,7 @@ export function EditorScreen({ client, index, onForgetPackage }: Props) {
     );
     const guide = Number(readSetting(GUIDE_KEY));
     if (readSetting(GUIDE_KEY) !== null && guide >= 0 && guide <= 1) instance.setGuideOpacity(guide);
+    if (readSetting(SNAP_KEY) === '0') instance.setSnapping(false);
     setEditor(instance);
     // Test seam for browser automation; dead code in production builds.
     if (import.meta.env.DEV) Object.assign(window, { __liveryEditor: instance });
@@ -478,6 +481,20 @@ export function EditorScreen({ client, index, onForgetPackage }: Props) {
         <div className="workspace-bar">
           {snap.tool && editor && <ToolBar tool={snap.tool} onDone={() => editor.endTool()} onCancel={() => editor.cancelTool()} />}
           <div className="zoom-bar" role="group" aria-label="Zoom">
+            <button
+              type="button"
+              className={`icon-btn${snap.snapping ? ' is-on' : ''}`}
+              aria-pressed={snap.snapping}
+              aria-label="Einrasten"
+              title="Einrasten an anderen Ebenen und an der Mittellinie des Autos (Strg beim Ziehen: frei verschieben)"
+              onClick={() => {
+                editor?.setSnapping(!snap.snapping);
+                writeSetting(SNAP_KEY, snap.snapping ? '0' : '1');
+              }}
+            >
+              <Magnet size={16} />
+            </button>
+            <span className="zoom-bar-divider" aria-hidden />
             <button type="button" className="icon-btn" onClick={() => editor?.zoomBy(0.8)} aria-label="Verkleinern">
               <Minus size={16} />
             </button>
@@ -511,6 +528,7 @@ export function EditorScreen({ client, index, onForgetPackage }: Props) {
               selectionCount={snap.selection.length}
               layers={snap.layers}
               tool={snap.tool}
+              canCopyToOtherSide={snap.mirrorAxis !== undefined}
             />
           </>
         )}

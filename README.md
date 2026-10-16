@@ -16,6 +16,9 @@ Du malst auf den offiziellen Vorlagen, legst Logos, Text und Formen darauf und b
   Die Punkte lassen sich danach auf der Fläche verschieben.
 - Freihand malen mit einstellbarer Glättung; alle Striche eines Durchgangs landen in einer Ebene, mit „Weiter malen“ kommen später neue dazu.
 - Jede Ebene hat einen Bereich: „Lack“ (unter Fenstern und Lichtern, auf den Lack zugeschnitten), „Scheiben“ (auf den Fensterscheiben, etwa als Sonnenblende) oder „Frei“.
+- Hilfslinien und Einrasten beim Verschieben: an Kanten und Mitten anderer Ebenen, an der Mittellinie des Autos und an der gespiegelten Stelle auf der anderen Fahrzeugseite.
+  Mit gedrückter Strg-Taste schiebt man frei, der Magnet-Knopf neben dem Zoom schaltet das Einrasten ganz ab.
+- „Auf die andere Seite“ kopiert eine Ebene an die passende Stelle der anderen Fahrzeugseite: Text, Nummern und Logos bleiben lesbar, Flammen, Linien und Formen werden gespiegelt.
 - Rückgängig und Wiederholen, automatisches Speichern pro Auto, Designs als Datei mit Freunden teilen.
 - Export als fertiges Zip für mod.io.
 - Direkt in den Ordner `LocalLiveries` des Spiels schreiben, auf Wunsch live nach jeder Änderung.
@@ -100,6 +103,8 @@ Es zeigt, ob neue Autos oder umbenannte Ebenen dazugekommen sind.
 - `src/lib/weathering.ts` erzeugt Rost und Kratzer, `src/lib/stickers.ts` beschreibt die Sticker-Vorlagen.
 - `src/lib/lines.ts` legt die Zierlinien durch ihre Punkte (Catmull-Rom-Kurve), `src/editor/Pinstripe.ts` ist die Linien-Ebene mit Kontur und Punkt-Griffen.
 - `src/lib/brush.ts` glättet die Pinselstriche: die Pinselspitze hängt an einem kurzen Faden hinter dem Mauszeiger.
+- `src/lib/symmetry.ts` findet die Spiegelachse zwischen den beiden Fahrzeugseiten: In allen Vorlagen liegt eine Seite kopfüber über dem Dach, die andere darunter.
+  `src/lib/snapping.ts` berechnet daraus und aus den anderen Ebenen das Einrasten.
 - `src/editor/LiveryEditor.ts` ist die Zeichenfläche (Fabric.js) mit Ebenen, Verlauf und Export-Rendering.
 - `src/lib/modExport.ts` schreibt Manifest, Zip und den `LocalLiveries`-Ordner.
 - `src/ui/` enthält die React-Oberfläche.
