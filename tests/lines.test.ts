@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_LINE_STYLE, MAX_LINE_POINTS, lineDashArray, linePath, sanitizeArea, sanitizeLine, type LinePoint } from '../src/lib/lines.ts';
+import {
+  DEFAULT_LINE_STYLE,
+  MAX_LINE_POINTS,
+  areaFromPath,
+  lineDashArray,
+  linePath,
+  sanitizeArea,
+  sanitizeLine,
+  type LinePoint,
+} from '../src/lib/lines.ts';
 
 const points: LinePoint[] = [
   [0, 0],
@@ -106,6 +115,20 @@ describe('sanitizeArea', () => {
     expect(sanitizeArea({ points: points.slice(0, 3), smooth: 'yes' })!.smooth).toBe(false);
     expect(sanitizeArea({ points: points.slice(0, 2) })).toBeUndefined();
     expect(sanitizeArea('area')).toBeUndefined();
+  });
+});
+
+describe('areaFromPath', () => {
+  it('gets the points and the curve back from the path of an area', () => {
+    for (const smooth of [true, false]) {
+      expect(areaFromPath(linePath(points, smooth, true))).toEqual({ points, smooth });
+    }
+  });
+
+  it('gives up on paths that are no area', () => {
+    expect(areaFromPath([['M', 0, 0], ['L', 10, 0], ['Z']])).toBeUndefined();
+    expect(areaFromPath('M 0 0')).toBeUndefined();
+    expect(areaFromPath(undefined)).toBeUndefined();
   });
 });
 

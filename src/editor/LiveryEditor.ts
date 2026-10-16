@@ -229,6 +229,7 @@ FabricObject.customProperties = [
   'flameColors',
   'stickerSpec',
   'lineSpec',
+  'areaSpec',
   'fillSpec',
   'textArc',
   // Fabric does not serialize it by default, but it is how a layer is locked.
@@ -821,6 +822,7 @@ export class LiveryEditor {
     const original = active[0];
     return this.enqueue(async () => {
       const [copy] = await this.restoreObjects([this.serialize(original)]);
+      if (!copy) return;
       copy.id = crypto.randomUUID();
       if (original.layerName) copy.layerName = this.nextName(original.layerName);
       arrange(copy, original);
@@ -1472,7 +1474,11 @@ export class LiveryEditor {
   }
 
   private restoreObjects(data: Record<string, unknown>[]): Promise<Tagged[]> {
-    return util.enlivenObjects<FabricObject>(structuredClone(data)).then((objects) => {
+    // Fabric drops a layer that fails to restore without a word; at least say which.
+    const reviver = (serialized: Record<string, unknown>, _instance?: unknown, error?: unknown) => {
+      if (error) console.error(`A ${String(serialized.type)} layer could not be restored`, error);
+    };
+    return util.enlivenObjects<FabricObject>(structuredClone(data), { reviver }).then((objects) => {
       for (const o of objects as Tagged[]) {
         // Designs saved before the windows band stored the clip as a boolean.
         const clip = o.clip as ClipMode | boolean | undefined;

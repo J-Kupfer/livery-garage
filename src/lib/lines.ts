@@ -166,6 +166,26 @@ export function sanitizeLine(value: unknown): LineSpec | undefined {
   return { ...sanitizeLineStyle(value), points };
 }
 
+/**
+ * The points of an area from its stored path, for areas saved before their points
+ * were: every segment of the path ends on one of them.
+ */
+export function areaFromPath(path: unknown): AreaSpec | undefined {
+  if (!Array.isArray(path)) return undefined;
+  const points: LinePoint[] = [];
+  let smooth = false;
+  for (const command of path) {
+    if (!Array.isArray(command) || command[0] === 'Z') break;
+    if (command[0] === 'C') smooth = true;
+    points.push([command[command.length - 2], command[command.length - 1]]);
+  }
+  // A smooth area closes with a curve back onto its first point.
+  const first = points[0];
+  const last = points.at(-1);
+  if (first && last && points.length > 1 && last[0] === first[0] && last[1] === first[1]) points.pop();
+  return sanitizeArea({ points, smooth });
+}
+
 /** Validates a free area from untrusted data; an area needs at least three points. */
 export function sanitizeArea(value: unknown): AreaSpec | undefined {
   if (!isRecord(value)) return undefined;

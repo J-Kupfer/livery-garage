@@ -6,7 +6,7 @@
 import type { AssetSource, DesignData } from '../editor/LiveryEditor.ts';
 import { ZONE_ORDER, type Look, type ZoneGradient } from './composition.ts';
 import { sanitizeFill } from './fills.ts';
-import { sanitizeArea, sanitizeLine } from './lines.ts';
+import { areaFromPath, sanitizeArea, sanitizeLine } from './lines.ts';
 import { sanitizePattern } from './patterns.ts';
 import { sanitizeSticker } from './stickers.ts';
 import { sanitizeWeathering } from './weathering.ts';
@@ -100,7 +100,8 @@ function validImageFilters(o: Record<string, unknown>): boolean {
 
 /** A free area is rebuilt from its points as well. */
 function validArea(o: Record<string, unknown>): boolean {
-  const spec = sanitizeArea(o.areaSpec);
+  // Files from the first release carry only the path.
+  const spec = sanitizeArea(o.areaSpec) ?? areaFromPath(o.path);
   if (!spec || o.kind !== 'area') return false;
   o.areaSpec = spec;
   delete o.path;

@@ -3,7 +3,7 @@
  * other shapes, so colour, gradient, pattern and outline work the same way.
  */
 import { classRegistry, type PathProps } from 'fabric';
-import { linePath, type AreaSpec, type LinePoint } from '../lib/lines.ts';
+import { areaFromPath, linePath, type AreaSpec, type LinePoint } from '../lib/lines.ts';
 import { PointPath, pointControls } from './PointPath.ts';
 
 export class Area extends PointPath {
@@ -19,7 +19,9 @@ export class Area extends PointPath {
 
   /** Restores from serialized data; the path is always rebuilt from the spec. */
   static fromObject(object: Record<string, unknown>): Promise<Area> {
-    return this._fromObject<Area>(object, { extraParam: 'areaSpec' });
+    // The first release did not store the points; such areas come back from their path.
+    const areaSpec = object.areaSpec ?? areaFromPath(object.path);
+    return this._fromObject<Area>({ ...object, areaSpec }, { extraParam: 'areaSpec' });
   }
 
   get points(): LinePoint[] {
